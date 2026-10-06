@@ -14,7 +14,7 @@ What differs between the sizes:
 | fp32 host RAM for full-size export + ORT | about 10 GB | about 45 GB | about 75 GB |
 | Repo dummy test entry | yes, covers the YaRN path | not needed (same path as 7B) | yes |
 
-Already done before this guide: tiny random parity on the 0.9B config (YaRN path) passes HF = QEff = ONNX Runtime; dummy-test goldens for the 0.9B are committed.
+Already done before this guide: tiny random parity on the 0.9B config (YaRN path) passes HF = QEff = ONNX Runtime; the full-size 0.9B passes all three CPU stages (24 tokens, text " the capital of France.\n* The capital of France is Paris.\n* The capital of France is not Berlin."); dummy-test goldens for the 0.9B are committed. Step 1 for the 0.9B is therefore a re-check on the server; the 3.7B has no CPU evidence yet.
 
 Prerequisites: [SERVER_SETUP.md](SERVER_SETUP.md) done, branch `k2-horizon-server-docs` checked out and up to date (`git fetch; git reset --hard origin/k2-horizon-server-docs` if the history moved), caches on `/local/mnt/workspace/<user>`, `free -g` noted.
 

@@ -85,10 +85,24 @@ The first run exports the ONNX (a few minutes) and compiles the QPC (longer). Bo
 
 ## Step 2: token match against Hugging Face
 
-The repo test does this for a reduced random model, on the card:
+The repo tests do this for a reduced random model, on the card. Run both from the repo root, with the same `HF_HOME` and `QEFF_HOME` as the run above:
 
-```bash
-pytest -n auto tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon and dummy"
+```csh
+setenv QEFF_REGENERATE_GOLDEN 1
+pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon and dummy" -v
+pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "k2_horizon_text" -v
+```
+
+- The first builds a tiny random K2 model, runs HF PyTorch, QEff PyTorch, ONNX Runtime and the card, and asserts the tokens match. `QEFF_REGENERATE_GOLDEN=1` makes it write the HF reference tokens into `tests/golden_outputs/goldens.json`.
+- The second runs the per-PR lanes: continuous batching, ONNX subfunctions, CCL, fp16 and bf16 export. The speculative-decoding case is an expected xfail for this model.
+
+Commit the golden file afterwards, it is part of the PR:
+
+```csh
+git status
+git add tests/golden_outputs/goldens.json
+git commit -s -m "K2 Horizon: add dummy-layer golden"
+git push fork k2-horizon-server-docs
 ```
 
 For the real weights, compare the card output with a greedy Hugging Face run of the same prompt:

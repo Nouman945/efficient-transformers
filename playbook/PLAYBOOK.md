@@ -2,70 +2,70 @@
 
 One document for the whole job: taking a customer's Hugging Face models from "which of these can run on Cloud AI 100 Ultra" to a merged QEfficient PR with benchmark numbers. Written from the MBZUAI catalog analysis and the `IFM/K2-Horizon-7B` onboarding (October 2026). Every command here was run; every pitfall listed was hit.
 
-Scripts referenced as `tools/...` live next to this file. The worked example lives in `examples/text_generation/k2_horizon/` on this branch.
+Scripts referenced as `tools/...` live next to this file; run them from the repo root on the server. The worked example lives in `examples/text_generation/k2_horizon/` on this branch.
 
 ## Contents
 
-| Part | What it covers | Where it runs |
-|---|---|---|
-| A | Environments: laptop, server, checks | both |
-| B | Catalog analysis: classify a customer's repos, verify, report | laptop |
-| C | Onboarding one model: read the code, write the wrapper, CPU parity | laptop |
-| D | Repo tests, docs, review | laptop |
-| E | Card validation: first run, repo tests on the card | server |
-| F | Benchmarking: matrix, metrics, Perf/Watt, Perf/Dollar | server |
-| G | Reporting: what to produce and how | laptop |
-| H | Submission: branches, PR, rules | work system |
-| I | Checklists and troubleshooting | |
+| Part | What it covers |
+|---|---|
+| A | Server setup and checks |
+| B | Catalog analysis: classify a customer's repos, verify, report |
+| C | Onboarding one model: read the code, write the wrapper, CPU parity |
+| D | Repo tests, docs, review |
+| E | Card validation: first run, repo tests on the card |
+| F | Benchmarking: matrix, metrics, Perf/Watt, Perf/Dollar |
+| G | Reporting: what to produce and how |
+| H | Submission: branches, PR, rules |
+| I | Checklists and troubleshooting |
 
-Timeline for reference: catalog of 109 repos classified in one day; 7B wrapper written, CPU-validated, reviewed, card-validated and benchmarked in two more.
+Everything runs on the server. The CPU stages (parity, goldens, reports) use the server's host CPU and RAM; the card stages use the AI 100 Ultra devices. Timeline for reference: catalog of 109 repos classified in one day; 7B wrapper written, CPU-validated, reviewed, card-validated and benchmarked in two more.
 
 ---
 
-## Part A: environments
+## Part A: server setup and checks
 
-### A1. Laptop (CPU only, everything up to ONNX Runtime)
+Shell is csh/tcsh on our server. The three differences from bash: `setenv NAME value`, `source env/bin/activate.csh`, and quote any `[0]` (`--device_group '[0]'`), or you get `python: No match.` `tools/env.csh` has the full environment; `tools/env.sh` is the same for a bash login.
 
-1. Clone and install. The repo pins `transformers==5.5.4` and CPU torch 2.7; do not reuse an env with another transformers.
-   ```bash
-   git clone https://github.com/quic/efficient-transformers.git
+### A1. Cards, SDK, host
+```csh
+/opt/qti-aic/tools/qaic-util -q
+/opt/qti-aic/tools/qaic-version-util --apps
+free -g
+df -h
+```
+- One Ultra card shows as 4 devices (QID 0 to 3). Note `Board power(Watts)` at idle (45 to 48 W here) and `Board TDP Cap(Watts)` (150). `Networks Active:0` on every device means nobody else is using the card.
+- Write down the SDK version; every report carries it. The library is validated against a matching SDK; a mismatch shows up as compile errors, not install errors.
+- Host RAM sets what you can do at full size on the CPU: fp32 is 4 bytes per parameter, and the ONNX export plus ONNX Runtime each hold a copy. A 7B needs about 36 GB for the export and the same again for the ONNX Runtime stage. With less, use reduced layers for the three-stage parity and bf16 for the PyTorch-only stage (Part C4).
+
+### A2. Disk: never the NFS home
+The home directory is NFS with a per-user quota. `df -h ~` shows the export, not your quota, so writes fail with `Disk quota exceeded` while `df` says 99 GB free; once it is full even `git pull` fails. Put the checkout and all three caches on the local disk. On our server that is `/local/mnt/workspace` (`drwxrwxrwt`; `/local/mnt` itself is root-owned):
+```csh
+set user = `whoami`
+mkdir -p /local/mnt/workspace/$user/hf /local/mnt/workspace/$user/qeff_cache /local/mnt/workspace/$user/qeff_logs
+setenv HF_HOME /local/mnt/workspace/$user/hf
+setenv QEFF_HOME /local/mnt/workspace/$user/qeff_cache
+setenv QEFF_LOG_PATH /local/mnt/workspace/$user/qeff_logs
+setenv HF_HUB_ENABLE_HF_TRANSFER 1
+touch $HF_HOME/.w && rm $HF_HOME/.w && echo writable
+```
+Put the `setenv` lines in `~/.cshrc` with the real path. Budget about 3x the bf16 checkpoint size per model (weights + fp32 ONNX + QPCs); delete weight caches of models that are done. If a run already died on the quota, clean home: `rm -rf ~/.cache/huggingface/hub/models--<org>--<model> ~/.cache/qefficient_logs`.
+
+### A3. Repo, Python, GitHub, Hugging Face
+1. Clone on the local disk and install. The repo pins `transformers==5.5.4` and CPU torch 2.7; do not reuse an env with another transformers.
+   ```csh
+   cd /local/mnt/workspace/$user
+   git clone https://github.com/<you>/efficient-transformers.git
    cd efficient-transformers
-   python3.11 -m venv qeff_env && source qeff_env/bin/activate
-   pip install -U pip && pip install -e ".[test]"
+   python3 -m venv qeff_env
+   source qeff_env/bin/activate.csh
+   pip install -U pip
+   pip install -e ".[test]"
+   pip install markdown-it-py
    ```
-2. Caches on a disk with space (`tools/env.sh`):
-   ```bash
-   export HF_HUB_CACHE=/path/hf_cache HF_HUB_ENABLE_HF_TRANSFER=1 QEFF_HOME=/path/qeff_cache
-   ```
-   Budget about 3x the bf16 checkpoint size per model (weights + fp32 ONNX). Delete weight caches of models that are done; the ONNX stays useful.
-3. A stored Hugging Face login that has expired makes every public download fail with `401`. `hf auth login` again, or `export HF_HUB_DISABLE_IMPLICIT_TOKEN=1` while working on public repos. Gated repos need a valid login with access approved.
-4. RAM sets the limit. fp32 is 4 bytes per parameter and export plus ONNX Runtime each hold a copy: on 31 GB, full-size three-stage parity works to about 2B parameters. Above that: reduced layers for the three stages and bf16 for the PyTorch-only stage (Part C4).
-
-### A2. Server with AI 100 Ultra cards
-
-Shell is csh/tcsh on our server. The three differences from bash: `setenv NAME value`, `source env/bin/activate.csh`, and quote any `[0]` (`--device_group '[0]'`), or you get `python: No match.`
-
-1. Cards and SDK:
-   ```csh
-   /opt/qti-aic/tools/qaic-util -q
-   /opt/qti-aic/tools/qaic-version-util --apps
-   ```
-   One Ultra card shows as 4 devices (QID 0 to 3). Note `Board power(Watts)` at idle (45 to 48 W here) and `Board TDP Cap(Watts)` (150). Write down the SDK version; every report carries it.
-2. The home directory is NFS with a per-user quota. `df -h ~` shows the export, not your quota, so writes fail with `Disk quota exceeded` while `df` says 99 GB free. Put all three caches on the local disk; on our server that is `/local/mnt/workspace` (`drwxrwxrwt`; `/local/mnt` itself is root-owned):
-   ```csh
-   set user = `whoami`
-   mkdir -p /local/mnt/workspace/$user/hf /local/mnt/workspace/$user/qeff_cache /local/mnt/workspace/$user/qeff_logs
-   setenv HF_HOME /local/mnt/workspace/$user/hf
-   setenv QEFF_HOME /local/mnt/workspace/$user/qeff_cache
-   setenv QEFF_LOG_PATH /local/mnt/workspace/$user/qeff_logs
-   setenv HF_HUB_ENABLE_HF_TRANSFER 1
-   touch $HF_HOME/.w && rm $HF_HOME/.w && echo writable
-   ```
-   `tools/env.csh` has this. Put the `setenv` lines in `~/.cshrc` with the real path. `QEFF_LOG_PATH` matters: the log is the first write that fails on a full quota, and it takes `git pull` down with it.
-3. If a run already died on the quota, clean home: `rm -rf ~/.cache/huggingface/hub/models--<org>--<model> ~/.cache/qefficient_logs`.
-4. Python env: `python3 -m venv qeff_env; source qeff_env/bin/activate.csh; pip install -e ".[test]"`, or the SDK's own `source /opt/qti-aic/dev/python/qeff/bin/activate.csh` then `pip install -e .`.
-5. The server has no GitHub credentials. Push from the laptop; regenerate goldens on the laptop (Part D4) instead of copying files off the server.
-6. Driving the server through an agent (we used Codex) works well with this rule set: follow the named guide file, run pytest without `-n`, report every command output, do not change source files, do not push.
+   Or the SDK's own env: `source /opt/qti-aic/dev/python/qeff/bin/activate.csh` then `pip install -e .`.
+2. GitHub credentials, once, so commits and pushes happen from the server: `gh auth login` (or an SSH key added to your GitHub account and `git remote set-url origin git@github.com:<you>/efficient-transformers.git`). Set `git config user.name` and `user.email` to the submitter.
+3. Hugging Face: public repos need no login. An expired stored login makes public downloads fail with `401`; `hf auth login` again, or `setenv HF_HUB_DISABLE_IMPLICIT_TOKEN 1` while working on public repos. Gated repos need a valid login with access approved.
+4. Driving the work through an agent on the server (we used Codex) works well with this rule set: follow the named guide file, run pytest without `-n`, report every command output, do not change source files unless asked, do not push unless asked.
 
 ---
 
@@ -152,7 +152,7 @@ When Part B found a wrong config value, the fix is an override at load, never an
 HF PyTorch = QEff PyTorch = ONNX Runtime, token for token. Export success alone proves nothing.
 1. Tiny random model with every optional feature on (`tools/k2_tiny_check.py`, adapt the config fields). Fast, catches wiring.
 2. Real weights, reduced layers: `tools/causal_lm_parity.py <model> --num-hidden-layers 2 --trust-remote-code`, then 8. Expected to match; the text is usually one repeated token, so weak evidence alone.
-3. Full model, PyTorch only, bf16: `--dtype bfloat16 --skip-export`, prompt with a known answer, read the text. This one shows the wrapper is right.
+3. Full model, PyTorch only, bf16: `--dtype bfloat16 --skip-export`, prompt with a known answer, read the text. This one shows the wrapper is right. With enough host RAM, drop `--skip-export` and `--dtype` and run all three stages at full size.
 4. Vision-language: `tools/vlm_parity.py` runs HF, exports both ONNX graphs (`kv_offload=True`) and drives them in ONNX Runtime with a loop mirroring `kv_offload_generate`; `--reduced` for big models. The repo's generic VLM ORT runner does not know every family's inputs.
 
 ---
@@ -162,12 +162,7 @@ HF PyTorch = QEff PyTorch = ONNX Runtime, token for token. Export success alone 
 1. Dummy-layer config in `tests/configs/causal_model_configs.json` (`causal_lm_models`): shrunk dims in `additional_params`, optional features switched on, real `vocab_size`.
 2. Per-PR entry (`per_pr_causal_text_models`): `id`, `model_name`, `model_type`, `is_moe`, `supports_blocking`, `num_hidden_layers`, `config_overrides`, `known_*` fields for lanes that cannot pass (speculative decoding is class-keyed and raises for remote code).
 3. Remote code: add to `ModelConfig.EXTERNAL_MODELS` in `QEfficient/utils/test_utils.py`. Only set `skip_hf_reference` if the model cannot run on CPU; otherwise the test has no reference and compares the card against nothing.
-4. Goldens, generated on CPU and committed:
-   ```bash
-   QEFF_REGENERATE_GOLDEN=1 pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "<model> and dummy" -q
-   QEFF_REGENERATE_GOLDEN=1 pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "<per_pr_id> and not speculative" -q
-   ```
-   Without the SDK the tests fail at compile, after writing `tests/golden_outputs/goldens.json`. The variant keys matched the server's exactly.
+4. Goldens: the card tests in Part E2 write them when run with `QEFF_REGENERATE_GOLDEN=1`; commit `tests/golden_outputs/goldens.json` afterwards. They are the HF reference tokens, computed on the host CPU, so they can also be regenerated on any CPU-only host (the test then fails at compile, after writing the file).
 5. Docs: row in `docs/source/validate.md` (marker ② on the family cell for remote code); a section in `examples/text_generation/README.md` with the `basic_inference.py --trust-remote-code` command. Site-specific guides stay out of the PR.
 6. Two independent reviews before the card: one with the repo's `skills_studio/skills/qeff-pr-reviewer/SKILL.md` checklist, one adversarial against the upstream code with tiny CPU experiments allowed. Ours found: no HF reference in the dummy test, docs that could not ship, a dead branch, 512 MB rotary tables, an MoE failure only at forward time, untested optional features. All fixed before stage 4.
 
@@ -221,7 +216,7 @@ Performance per Dollar is `decode_tok_s / price`; agree with the customer whethe
 
 Three documents came out of this work; build them from data, not by hand, so a rerun refreshes them.
 
-1. **Catalog analysis report** (`tools/reports/build_analysis_report.py`): tiers with counts, per-family tables, local validation results, the four-stage flow, server commands, risks first. Generated from the catalog JSON and the parity result files; PDF through headless Chrome.
+1. **Catalog analysis report** (`tools/reports/build_analysis_report.py`): tiers with counts, per-family tables, local validation results, the four-stage flow, server commands, risks first. Generated from the catalog JSON and the parity result files. The builders write HTML and render PDF with headless Chrome, Chromium or wkhtmltopdf, whichever the server has; with none of them, open the HTML in a browser and print to PDF.
 2. **Effort-ranked plan** (`tools/reports/build_ranked_plan.py`): groups A/B/C, rank, effort size, downloads, why this rank, what is left, suggested order. The rows are curated by hand in the script; the counts are checked against the catalog.
 3. **Benchmark report**: the CSV plus a table with every number next to its settings (prompt tokens, generated tokens, batch, devices, precision, prefill, ctx, SDK version, library commit), idle power, and the Perf/Watt and Perf/Dollar formulas.
 
@@ -233,7 +228,7 @@ The PR body is the fourth document: `.github/PULL_REQUEST_TEMPLATE/pr_template.m
 
 ## Part H: submission
 
-1. Fork, feature branch from upstream `main`. Two branches when there are site-specific docs: the PR branch (wrapper, transforms, constants, tests, goldens, `validate.md`, README section) and a docs branch rebased on it (run guide, server setup, benchmark, playbook). Only the first goes upstream. Rebase the docs branch after every PR-branch change and force-push it; tell the server to `git fetch; git reset --hard` on it.
+1. Fork, feature branch from upstream `main`. Two branches when there are site-specific docs: the PR branch (wrapper, transforms, constants, tests, goldens, `validate.md`, README section) and a docs branch rebased on it (run guide, server setup, benchmark, playbook). Only the first goes upstream. Rebase the docs branch after every PR-branch change and force-push it; other checkouts of it need `git fetch; git reset --hard origin/<docs-branch>`.
 2. Commits `git commit -s`, author set to the submitter, message says what, not how.
 3. Repo rules: a human opens the PR, reviews every line, discloses AI assistance, lists the exact test commands. Agents prepare, humans submit.
 4. Open as draft with the body file; `gh pr ready` once the card evidence is in:
@@ -247,8 +242,7 @@ The PR body is the fourth document: `.github/PULL_REQUEST_TEMPLATE/pr_template.m
 ## Part I: checklists and troubleshooting
 
 ### Checklist
-- [ ] Laptop env: pinned transformers, caches on a big disk, HF login valid
-- [ ] Server env: cards listed, SDK version noted, caches on local disk, `writable` printed
+- [ ] Server: cards listed, SDK version noted, RAM known, checkout and caches on the local disk, `writable` printed, GitHub login works
 - [ ] Catalog fetched, tiers assigned, every "ready" repo verified with keys and a transform dry run
 - [ ] Small models parity-checked on CPU; reports built from data
 - [ ] Upstream code read, per-size feature table, imports resolve under the pin
@@ -278,5 +272,5 @@ The PR body is the fourth document: `.github/PULL_REQUEST_TEMPLATE/pr_template.m
 | Image ignored by a LLaVA fine-tune | wrong `image_token_index` in the repo config | override at load |
 | ONNX 0.5 GB bigger than the weights | rotary tables for 524288 positions | cap with a constant |
 | 36B loads then `TypeError ... position_embeddings` | MoE layers not mapped | refuse in `__qeff_init__` |
-| Export killed on the laptop | fp32 model + export copy over RAM | reduced layers, or export on the server |
+| Export killed (OOM) | fp32 model + export copy over host RAM | reduced layers for parity; `free -g` before full-size exports |
 | Benchmark row below a smaller batch | board at the 150 W cap, throttled | rerun with more repeats, note it |

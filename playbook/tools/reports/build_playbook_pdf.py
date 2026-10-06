@@ -14,7 +14,7 @@ HERE = Path(__file__).parent
 ROOT = HERE.parents[2]  # repo checkout root (playbook/tools/reports -> repo)
 # the source lives on a branch that may not be checked out, so read it through git
 SRC_SPEC = sys.argv[1] if len(sys.argv) > 1 else "k2-horizon-server-docs:playbook/PLAYBOOK.md"
-OUT_PDF = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "Cloud_AI100_Model_Onboarding_Playbook.pdf"
+OUT_PDF = (Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "Cloud_AI100_Model_Onboarding_Playbook.pdf").resolve()
 OUT_HTML = OUT_PDF.with_suffix(".html")
 
 text = subprocess.run(["git", "-C", str(ROOT), "show", SRC_SPEC], check=True, capture_output=True, text=True).stdout

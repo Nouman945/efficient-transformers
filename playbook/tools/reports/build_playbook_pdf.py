@@ -4,6 +4,7 @@ python build_playbook_pdf.py <branch>:<path/to/file.md> <out.pdf>
 """
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,16 +62,25 @@ HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{ti
 </body></html>"""
 
 OUT_HTML.write_text(HTML)
-subprocess.run(
-    [
-        "google-chrome",
-        "--headless=new",
-        "--disable-gpu",
-        "--no-pdf-header-footer",
-        f"--print-to-pdf={OUT_PDF}",
-        OUT_HTML.as_uri(),
-    ],
-    check=True,
-    capture_output=True,
-)
+for browser in ("google-chrome", "chromium", "chromium-browser"):
+    if shutil.which(browser):
+        subprocess.run(
+            [
+                browser,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-pdf-header-footer",
+                f"--print-to-pdf={OUT_PDF}",
+                OUT_HTML.as_uri(),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        break
+else:
+    if shutil.which("wkhtmltopdf"):
+        subprocess.run(["wkhtmltopdf", "--quiet", str(OUT_HTML), str(OUT_PDF)], check=True)
+    else:
+        print(f"No Chrome, Chromium or wkhtmltopdf found. Open {OUT_HTML} in a browser and print to PDF.")
+        raise SystemExit(0)
 print(OUT_PDF)

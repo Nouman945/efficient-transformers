@@ -139,6 +139,8 @@ Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV ca
 
 ## Step 4: Performance per Watt and per Dollar
 
+For the full sweep (devices, precision, context lengths, batch sizes) use [BENCHMARK.md](BENCHMARK.md) and `benchmark.py`; they write one CSV with all the metrics below.
+
 - Watts: `/opt/qti-aic/tools/qaic-util -q` prints `Board power(Watts)` and `SOC power(Watts)` per device (board TDP cap is 150 W on the Ultra, SoC cap 31 W). Sample it while a decode run is in progress, for example `watch -n 1 /opt/qti-aic/tools/qaic-util -q` in a second terminal, and record idle power as well. Use board power for the per-card number.
 - Performance per Watt = decode tokens per second divided by the measured card power during decode.
 - Performance per Dollar = decode tokens per second divided by the card price (or hourly cost) used for the comparison. The price is an input, agree it with the customer.

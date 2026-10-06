@@ -123,7 +123,7 @@ The acceptance rule of the repo: HF PyTorch, QEff PyTorch and ONNX Runtime must 
 2. **Real weights, reduced layers** (`tools/causal_lm_parity.py <model> --num-hidden-layers 2 --trust-remote-code`, then 8 layers). Matches are expected, but the text is usually one repeated token, so this is weak evidence on its own.
 3. **Full model, PyTorch only, bf16** (`--dtype bfloat16 --skip-export`). Fits 9B in 31 GB RAM. Use a prompt with a known answer ("The capital of France is") and read the text. This is the stage that shows the wrapper is right on the real model.
 4. The parity script frees the PyTorch model before the ONNX Runtime stage; without that the 8-layer run does not fit in RAM.
-5. For vision-language models the repo's generic ORT runner does not know every family's inputs. We wrote `onboarding/vlm_parity.py` with a dual-ONNX loop that mirrors `kv_offload_generate`; reuse it, and remember `ApiRunnerVlm.setup_ort_session` for the INT32_MAX sentinel the ORT needs rewritten.
+5. For vision-language models the repo's generic ORT runner does not know every family's inputs. We wrote `tools/vlm_parity.py` with a dual-ONNX loop that mirrors `kv_offload_generate`; reuse it, and remember `ApiRunnerVlm.setup_ort_session` for the INT32_MAX sentinel the ORT needs rewritten.
 
 ## Phase 5: tests, docs, review
 

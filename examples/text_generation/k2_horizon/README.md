@@ -10,7 +10,9 @@ How to compile and run `IFM/K2-Horizon-7B` on a server with Cloud AI 100 Ultra c
 | HF vs QEff PyTorch vs ONNX Runtime, first 8 layers (fp32) | CPU | Tokens match |
 | ONNX export, full model (fp32) | Server | Done |
 | Compile and run on AI 100 Ultra, fp16, 1 device, ctx 4096 | Server | Output matches the CPU reference. TTFT 0.2 s, decode 6.19 tokens/s |
-| MXFP6 + MXINT8, 1 and 4 devices | Server | To do |
+| MXFP6 + MXINT8, 1 device | Server | TTFT 0.14 s, decode 14.4 tokens/s, board power 70 W |
+| MXFP6 + MXINT8, 4 devices | Server | TTFT 0.05 s, decode 51.8 tokens/s, board power about 127 W, 0.41 tokens/s per W |
+| Repo tests on AI 100 (dummy, CB, per-PR fp16/fp32 lanes) | Server | Passed. The bf16 lane targets AI 200 and cannot compile on an AI 100-only host |
 
 The wrapper covers the dense sizes (0.9B, 3.7B, 7B, 32B). The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped yet.
 

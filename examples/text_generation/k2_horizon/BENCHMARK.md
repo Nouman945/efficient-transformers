@@ -72,13 +72,20 @@ The script appends one row per case and prints the row as JSON. A case that fail
 
 ## Report
 
-Use the CSV as is, or this table (fill from the CSV). Reference numbers measured on 6 October 2026, single stream:
+Use the CSV as is, or this table. Reference run of the full matrix on 6 October 2026 (256 generated tokens, 3 repeats, idle 46 to 48 W):
 
-| Case | TTFT | Decode tok/s | Board W | tok/s per W |
-|---|---|---|---|---|
-| fp16, 1 device, ctx 4k | 0.20 s | 6.2 | 70 | 0.09 |
-| MXFP6+MXINT8, 1 device, ctx 4k | 0.14 s | 14.4 | 70 | 0.21 |
-| MXFP6+MXINT8, 4 devices, ctx 4k | 0.05 s | 51.8 | 127 | 0.41 |
+| Case | Input | Batch | TTFT | Decode tok/s | Per stream | Board W | tok/s per W |
+|---|---|---|---|---|---|---|---|
+| fp16, 1 dev, ctx 4k | 128 | 1 | 0.58 s | 5.9 | 5.9 | 65 | 0.09 |
+| MXFP6+MXINT8, 1 dev, ctx 4k | 128 | 1 | 0.14 s | 14.1 | 14.1 | 71 | 0.20 |
+| MXFP6+MXINT8, 4 dev, ctx 4k | 128 | 1 | 0.06 s | 48.6 | 48.6 | 131 | 0.37 |
+| MXFP6+MXINT8, 4 dev, ctx 4k | 1024 | 1 | 0.44 s | 48.1 | 48.1 | 139 | 0.35 |
+| MXFP6+MXINT8, 4 dev, ctx 8k | 4096 | 1 | 1.90 s | 44.8 | 44.8 | 140 | 0.32 |
+| MXFP6+MXINT8, 4 dev, ctx 4k, CB | 128 | 4 | 0.06 s | 100 | 25.0 | 150 | 0.67 |
+| MXFP6+MXINT8, 4 dev, ctx 4k, CB | 128 | 8 | 0.06 s | 284 | 35.5 | 133 | 2.14 |
+| MXFP6+MXINT8, 4 dev, ctx 4k, CB | 128 | 16 | 0.06 s | 456 | 28.5 | 140 | 3.26 |
+
+The batch-4 row hit the 150 W TDP cap and its per-stream rate is below the batch-8 row, so treat it as throttled and rerun the CB cases with `--repeats 5` before publishing.
 
 Next to every number, state: prompt tokens, generated tokens, batch size, devices, precision, `prefill_seq_len`, `ctx_len`, SDK version (`/opt/qti-aic/tools/qaic-version-util --apps`) and the QEfficient commit. Idle power (45 W on this card) goes in the report too.
 

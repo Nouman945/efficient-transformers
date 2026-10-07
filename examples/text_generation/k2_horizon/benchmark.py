@@ -142,6 +142,8 @@ def run_case(case, args, tokenizer):
     )
     if continuous_batching:
         compile_kwargs["full_batch_size"] = batch_size
+    if args.node_precision_info and case.get("mxfp6", False):
+        compile_kwargs["node_precision_info"] = args.node_precision_info
     qpc_path = model.compile(**compile_kwargs)
 
     prompt = build_prompt(tokenizer, case["input_len"])
@@ -199,6 +201,9 @@ def main():
     parser.add_argument("--repeats", type=int, default=3, help="Timed runs per case, after one warm-up")
     parser.add_argument("--num-cores", type=int, default=16)
     parser.add_argument("--card-price-usd", type=float, default=None, help="Card price for tokens/s per dollar")
+    parser.add_argument(
+        "--node-precision-info", default=None, help="Compiler NPI yaml applied to every MXFP6 case (see configs/)"
+    )
     args = parser.parse_args()
 
     cases = json.loads(Path(args.matrix).read_text())

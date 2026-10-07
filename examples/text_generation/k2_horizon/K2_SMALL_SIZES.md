@@ -95,6 +95,34 @@ Same 8-case matrix as the 7B (see [BENCHMARK.md](BENCHMARK.md)). First pass comp
    ```
    If the push is refused for credentials, see SERVER_SETUP.md on `gh auth login`, or leave the commit local and report it.
 
+## 0.9B and MXFP6: known issue and the fix to test
+
+On the card, the 0.9B with `--mxfp6` produced a looping output ("1.#. The capital of France is 1. ...") while fp16 and fp16 + MXINT8 were correct. A CPU simulation of MXFP6 (E2M3, 32-element blocks; `tools/mxfp6_probe.py`) reproduces the sensitivity and locates it:
+
+| Weights in MXFP6 | Perplexity (fp32 = 9.28) | Greedy continuation |
+|---|---|---|
+| all | 9.70 | off topic after 5 tokens |
+| all except layers 0 to 3 | 9.49 | correct |
+| all except MLP of layers 0 to 3 | 9.44 | `* * * *` loop |
+| all except attention of layers 0 to 3 | 9.78 | off topic |
+| all except layers 24 to 27 | 9.70 | off topic |
+
+No single weight is an outlier (quantization error is a uniform 3% everywhere); the model is simply sensitive in its first four layers. Keeping the 28 weight matmuls of layers 0 to 3 in full precision costs about 14% of the MXFP6 saving and restores correct output in the simulation.
+
+`configs/k2_horizon_0_9b_npi_layers0-3.yaml` lists those 28 nodes (ONNX output names of `q/k/v/o_proj` and `gate/up/down_proj` MatMuls in `/model/layers.0..3/`). Test it on the card:
+
+```csh
+python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
+    --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --generation-len 64 \
+    --num-cores 16 --device-group '[0]' --mxfp6 --mxint8-kv-cache \
+    --node-precision-info examples/text_generation/k2_horizon/configs/k2_horizon_0_9b_npi_layers0-3.yaml
+```
+
+- Output coherent and starting like the fp16 run: the NPI is the production setting for the 0.9B with MXFP6; pass `--node-precision-info` to `benchmark.py` for the MXFP6 cases and record it in RESULTS_0.9B.md.
+- Still broken: widen the file to layers 0 to 5 (regenerate with `tools/mxfp6_probe.py`'s method, or edit the yaml by copying the layer blocks) and try once more. If that also fails, the validated setting for the 0.9B is fp16 + MXINT8 KV cache, no MXFP6; write that in RESULTS_0.9B.md and benchmark with `--only fp16_1dev_ctx4k` plus a copy of the MXFP6 cases with `"mxfp6": false`.
+
+Either way the 0.9B's intended platform is mobile; on AI 100 its 2 GB of fp16 weights need no compression.
+
 ## What a failure means
 
 | Where | Symptom | Likely cause |
@@ -111,7 +139,7 @@ Same 8-case matrix as the 7B (see [BENCHMARK.md](BENCHMARK.md)). First pass comp
 
 0.9B:
 
-> In ~/efficient-transformers (branch k2-horizon-server-docs, local disk checkout), follow examples/text_generation/k2_horizon/K2_SMALL_SIZES.md for IFM/K2-Horizon-0.9B, Steps 1 to 5 in order. Set the cache variables from SERVER_SETUP.md first and confirm `qaic-util -q` shows Networks Active:0. Run pytest without -n. Report every RESULT line, both generated texts in Step 2 with the Performance Stats blocks, the pytest summary, the benchmark CSV, idle board power and the SDK version. Do not change source files other than creating RESULTS_0.9B.md and editing the README status table. Commit with -s and push; if the push fails, report the commit hash.
+> In ~/efficient-transformers (branch k2-horizon-server-docs, local disk checkout), follow examples/text_generation/k2_horizon/K2_SMALL_SIZES.md for IFM/K2-Horizon-0.9B, Steps 1 to 5 in order, and for the MXFP6 runs apply the section "0.9B and MXFP6" (test the NPI yaml first; use it in the benchmark if it works, otherwise fall back as described). Set the cache variables from SERVER_SETUP.md first and confirm `qaic-util -q` shows Networks Active:0. Run pytest without -n. Report every RESULT line, both generated texts in Step 2 with the Performance Stats blocks, the pytest summary, the benchmark CSV, idle board power and the SDK version. Do not change source files other than creating RESULTS_0.9B.md and editing the README status table. Commit with -s and push; if the push fails, report the commit hash.
 
 3.7B:
 

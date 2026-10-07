@@ -34,12 +34,20 @@ def main():
     parser.add_argument("--mxfp6", action="store_true", help="MXFP6 weights for the matmuls")
     parser.add_argument("--mxint8-kv-cache", action="store_true", help="MXINT8 KV cache")
     parser.add_argument("--use-onnx-subfunctions", action="store_true", help="Faster export and compile")
+    parser.add_argument(
+        "--node-precision-info",
+        default=None,
+        help="Compiler NPI yaml; matmuls listed there keep full precision under --mxfp6 (see configs/)",
+    )
     parser.add_argument("--compile-only", action="store_true")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     model = QEFFAutoModelForCausalLM.from_pretrained(args.model_name, trust_remote_code=True)
 
+    compile_kwargs = {}
+    if args.node_precision_info:
+        compile_kwargs["node_precision_info"] = args.node_precision_info
     qpc_path = model.compile(
         prefill_seq_len=args.prefill_seq_len,
         ctx_len=args.ctx_len,
@@ -50,6 +58,7 @@ def main():
         use_onnx_subfunctions=args.use_onnx_subfunctions,
         aic_enable_depth_first=True,
         mos=1,
+        **compile_kwargs,
     )
     print(f"Model compiled to: {qpc_path}")
     if args.compile_only:

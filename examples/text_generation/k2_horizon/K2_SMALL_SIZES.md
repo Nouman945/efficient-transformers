@@ -95,33 +95,21 @@ Same 8-case matrix as the 7B (see [BENCHMARK.md](BENCHMARK.md)). First pass comp
    ```
    If the push is refused for credentials, see SERVER_SETUP.md on `gh auth login`, or leave the commit local and report it.
 
-## 0.9B and MXFP6: known issue and the fix to test
+## 0.9B and MXFP6: result, closed
 
-On the card, the 0.9B with `--mxfp6` produced a looping output ("1.#. The capital of France is 1. ...") while fp16 and fp16 + MXINT8 were correct. A CPU simulation of MXFP6 (E2M3, 32-element blocks; `tools/mxfp6_probe.py`) reproduces the sensitivity and locates it:
+On the card, the 0.9B with `--mxfp6` produced a looping output ("1.#. The capital of France is 1. ...") while fp16 and fp16 + MXINT8 were correct. A CPU simulation of MXFP6 (`tools/mxfp6_probe.py`) showed the model is uniformly sensitive (3% weight error everywhere, no outlier layer) with the first four layers mattering most; perplexity cost of full MXFP6 is 4.5%.
 
-| Weights in MXFP6 | Perplexity (fp32 = 9.28) | Greedy continuation |
-|---|---|---|
-| all | 9.70 | off topic after 5 tokens |
-| all except layers 0 to 3 | 9.49 | correct |
-| all except MLP of layers 0 to 3 | 9.44 | `* * * *` loop |
-| all except attention of layers 0 to 3 | 9.78 | off topic |
-| all except layers 24 to 27 | 9.70 | off topic |
+Tested on the card with an NPI file keeping layers 0 to 3 (then 0 to 5) in full precision (`configs/k2_horizon_0_9b_npi_layers0-3.yaml`): the `1.#` failure disappears but the text still degenerates ("A capitalist is a person who is a capitalist..."), and because `FP32NodeInstanceNames` runs those matmuls in fp32 compute, TTFT went from 0.2 s to 9.8 s and decode to 5.8 tok/s. Not usable either way.
 
-No single weight is an outlier (quantization error is a uniform 3% everywhere); the model is simply sensitive in its first four layers. Keeping the 28 weight matmuls of layers 0 to 3 in full precision costs about 14% of the MXFP6 saving and restores correct output in the simulation.
-
-`configs/k2_horizon_0_9b_npi_layers0-3.yaml` lists those 28 nodes (ONNX output names of `q/k/v/o_proj` and `gate/up/down_proj` MatMuls in `/model/layers.0..3/`). Test it on the card:
+**Validated setting for the 0.9B: fp16 weights, MXINT8 KV cache, no MXFP6.** Its 2 GB of weights need no compression on AI 100, and its target platform is mobile. Use `benchmark_matrix_0_9b.json` (same 8 cases, MXFP6 off) for Step 4:
 
 ```csh
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
-    --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --generation-len 64 \
-    --num-cores 16 --device-group '[0]' --mxfp6 --mxint8-kv-cache \
-    --node-precision-info examples/text_generation/k2_horizon/configs/k2_horizon_0_9b_npi_layers0-3.yaml
+python examples/text_generation/k2_horizon/benchmark.py --model-name IFM/K2-Horizon-0.9B \
+    --matrix examples/text_generation/k2_horizon/benchmark_matrix_0_9b.json \
+    --out /local/mnt/workspace/$user/k2_0.9B_benchmark.csv --repeats 3
 ```
 
-- Output coherent and starting like the fp16 run: the NPI is the production setting for the 0.9B with MXFP6; pass `--node-precision-info` to `benchmark.py` for the MXFP6 cases and record it in RESULTS_0.9B.md.
-- Still broken: widen the file to layers 0 to 5 (regenerate with `tools/mxfp6_probe.py`'s method, or edit the yaml by copying the layer blocks) and try once more. If that also fails, the validated setting for the 0.9B is fp16 + MXINT8 KV cache, no MXFP6; write that in RESULTS_0.9B.md and benchmark with `--only fp16_1dev_ctx4k` plus a copy of the MXFP6 cases with `"mxfp6": false`.
-
-Either way the 0.9B's intended platform is mobile; on AI 100 its 2 GB of fp16 weights need no compression.
+Record the MXFP6 finding in RESULTS_0.9B.md with the two card outputs. The 3.7B is a different shape; try plain MXFP6 on it first, as with the 7B, and only fall back the same way if it misbehaves.
 
 ## What a failure means
 
@@ -139,7 +127,7 @@ Either way the 0.9B's intended platform is mobile; on AI 100 its 2 GB of fp16 we
 
 0.9B:
 
-> In ~/efficient-transformers (branch k2-horizon-server-docs, local disk checkout), follow examples/text_generation/k2_horizon/K2_SMALL_SIZES.md for IFM/K2-Horizon-0.9B, Steps 1 to 5 in order, and for the MXFP6 runs apply the section "0.9B and MXFP6" (test the NPI yaml first; use it in the benchmark if it works, otherwise fall back as described). Set the cache variables from SERVER_SETUP.md first and confirm `qaic-util -q` shows Networks Active:0. Run pytest without -n. Report every RESULT line, both generated texts in Step 2 with the Performance Stats blocks, the pytest summary, the benchmark CSV, idle board power and the SDK version. Do not change source files other than creating RESULTS_0.9B.md and editing the README status table. Commit with -s and push; if the push fails, report the commit hash.
+> In ~/efficient-transformers (branch k2-horizon-server-docs, local disk checkout), follow examples/text_generation/k2_horizon/K2_SMALL_SIZES.md for IFM/K2-Horizon-0.9B, Steps 1 to 5 in order; skip the MXFP6 runs in Step 2 and use benchmark_matrix_0_9b.json in Step 4, as the section "0.9B and MXFP6" says. Set the cache variables from SERVER_SETUP.md first and confirm `qaic-util -q` shows Networks Active:0. Run pytest without -n. Report every RESULT line, both generated texts in Step 2 with the Performance Stats blocks, the pytest summary, the benchmark CSV, idle board power and the SDK version. Do not change source files other than creating RESULTS_0.9B.md and editing the README status table. Commit with -s and push; if the push fails, report the commit hash.
 
 3.7B:
 

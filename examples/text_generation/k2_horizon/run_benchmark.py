@@ -178,7 +178,6 @@ def benchmark_model(model_name, cases, args, out_csv):
         repeats=args.repeats,
         num_cores=args.num_cores,
         card_price_usd=args.card_price_usd,
-        node_precision_info=args.node_precision_info,
     )
     failures = []
     if out_csv.exists():
@@ -272,7 +271,6 @@ def main():
     parser.add_argument("--repeats", type=int, default=3, help="timed runs per case after one warm-up")
     parser.add_argument("--num-cores", type=int, default=16)
     parser.add_argument("--card-price-usd", type=float, help="card price, fills tok/s per dollar")
-    parser.add_argument("--node-precision-info", help="compiler NPI yaml applied to every MXFP6 case")
     parser.add_argument(
         "--workspace", default=f"/local/mnt/workspace/{getpass.getuser()}", help="local disk for caches and results"
     )

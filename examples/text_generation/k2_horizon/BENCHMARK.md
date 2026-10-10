@@ -40,31 +40,32 @@ Each case does one warm-up `generate()` (not timed) and then `--repeats` timed r
 | `mx_4dev_ctx4k_cb8` | 4 | MXFP6 + MXINT8 | 128 / 4096 | 128 | 8 | 8 users |
 | `mx_4dev_ctx4k_cb16` | 4 | MXFP6 + MXINT8 | 128 / 4096 | 128 | 16 | 16 users |
 
-## H200 reference workloads (`--workload h200`)
+## Serving workloads (`--workload serving`)
 
-MBZUAI shared H200 serving numbers (SGLang, 1 x H200 TP1 for the dense sizes). `--workload h200` runs the same shapes on our card so the tables line up:
+The default matrix uses short prompts (128 tokens, 256 out). `--workload serving` runs the shapes MBZUAI used in their own reference sheet, so our table lines up with theirs row for row: 1024-token prompts, long outputs, 1 to 32 users.
 
 | Matrix | Models | Cases |
 |---|---|---|
-| `benchmark_matrix_h200.json` | 7B, 3.7B | 1024 in / 1024 out, 1024 in / 10240 out, 10240 in / 1024 out, each at 1, 2, 4, 8, 16, 32 users, MXFP6 + MXINT8, 4 devices (18 cases) |
-| `benchmark_matrix_h200_0_9b.json` | 0.9B | 1024 in / 128 out at 1 to 128 users, 1024 in / 1024 out at 1 to 32 users, fp16 + MXINT8, 4 devices (14 cases) |
+| `benchmark_matrix_serving.json` | 7B, 3.7B | 1024 in / 1024 out, 1024 in / 10240 out, 10240 in / 1024 out, each at 1, 2, 4, 8, 16, 32 users, MXFP6 + MXINT8, 4 devices (18 cases) |
+| `benchmark_matrix_serving_0_9b.json` | 0.9B | 1024 in / 128 out at 1 to 128 users, 1024 in / 1024 out at 1 to 32 users, fp16 + MXINT8, 4 devices (14 cases) |
 
 ```csh
-python examples/text_generation/k2_horizon/run_benchmark.py --workload h200 --dry-run
-python examples/text_generation/k2_horizon/run_benchmark.py --workload h200
+python examples/text_generation/k2_horizon/run_benchmark.py --workload serving --dry-run
+python examples/text_generation/k2_horizon/run_benchmark.py --workload serving
 ```
 
-Results go to `/local/mnt/workspace/$USER/k2_horizon_benchmark_h200/`, separate from the default matrix. The report has an `ITL ms` column (`1000 / per-stream tok/s`) next to their ITL P50.
+Results go to `/local/mnt/workspace/$USER/k2_horizon_benchmark_serving/`, separate from the default matrix. The report has an `ITL ms` column (`1000 / per-stream tok/s`, inter-token latency of one stream).
 
-Run time: the 10240-output cases decode 10240 steps per repeat (about 6 minutes each at 30 tok/s per stream), and every case compiles its own QPC the first time. Start with the quick subset for all three models, then the full sweep:
+Run time: the 10240-output cases decode 10240 steps per repeat (about 6 minutes each at 30 tok/s per stream), and every case compiles its own QPC the first time. Start with the quick subset, then the full sweep:
 
 ```csh
-python examples/text_generation/k2_horizon/run_benchmark.py --workload h200 --repeats 1 --only h200_in1k_out1k_c1 h200_in1k_out1k_c16 h200_in1k_out1k_c32 h200_in1k_out128_c1 h200_in1k_out128_c128
+python examples/text_generation/k2_horizon/run_benchmark.py --workload serving --repeats 1 --models IFM/K2-Horizon-7B IFM/K2-Horizon-3.7B --only in1k_out1k_c1 in1k_out1k_c16 in1k_out1k_c32
+python examples/text_generation/k2_horizon/run_benchmark.py --workload serving --repeats 1 --models IFM/K2-Horizon-0.9B --only in1k_out128_c1 in1k_out128_c128 in1k_out1k_c16
 ```
 
-(`--only` ids that are not in a model's matrix are an error, so run the 7B/3.7B subset and the 0.9B subset as two commands if they differ.) A 32-user or 128-user case that does not fit in device memory fails and is listed under the table; the others still run.
+A 32-user or 128-user case that does not fit in device memory fails and is listed under the table; the others still run.
 
-Differences that stay even with matching shapes: ours is a static batch of identical prompts through `generate()`, theirs is a serving run with request arrivals; our ITL is a mean, theirs a P50; our power is measured board power, their sheet has no power column (use the H200 TDP of 700 W and say so, or ask for `nvidia-smi` draw during their run).
+When comparing with the customer's sheet: ours is a static batch of identical prompts through `generate()`, theirs is a serving run with request arrivals; our ITL is a mean, theirs a P50; our power is measured board power, their sheet has no power column.
 
 Fields per case: `devices` (list of device ids), `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len` (prompt tokens, a multiple of `prefill_seq_len` avoids a padded last chunk), `generation_len`, `batch_size` (1 = plain, more = continuous batching with `full_batch_size`).
 

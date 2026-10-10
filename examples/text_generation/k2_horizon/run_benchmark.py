@@ -14,7 +14,7 @@ Markdown report with every table.
 
     python run_benchmark.py                                   # 7B, 3.7B, 0.9B, default matrices
     python run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
-    python run_benchmark.py --workload h200                   # the MBZUAI H200 reference workloads
+    python run_benchmark.py --workload serving                # 1024-token prompts, long outputs, up to 32 users
     python run_benchmark.py --dry-run                         # checks and plan only, no compile
     python run_benchmark.py --report-only                     # rebuild REPORT.md from the CSVs
 
@@ -40,10 +40,10 @@ REPO = HERE.parents[2]
 QAIC_TOOLS = Path("/opt/qti-aic/tools")
 DEFAULT_MODELS = ["IFM/K2-Horizon-7B", "IFM/K2-Horizon-3.7B", "IFM/K2-Horizon-0.9B"]
 # the 0.9B degrades with MXFP6 weights, its matrices use fp16 + MXINT8 instead
-# "h200" mirrors the workloads of the MBZUAI H200 reference sheet (1024-token prompts, up to 32 users)
+# "serving": 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B), the shapes in the customer's reference sheet
 WORKLOADS = {
     "default": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_0_9b.json", None: "benchmark_matrix.json"},
-    "h200": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_h200_0_9b.json", None: "benchmark_matrix_h200.json"},
+    "serving": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_serving_0_9b.json", None: "benchmark_matrix_serving.json"},
 }
 MAX_CTX_LEN = 65536  # K2_HORIZON_MAX_POSITION_EMBEDDINGS
 

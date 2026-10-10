@@ -1,9 +1,8 @@
 """
-Stages 1-3 of QEfficient causal LM onboarding for one Hub model:
-HF PyTorch -> QEff KV PyTorch -> ONNX export -> ONNX Runtime, with a token match check.
-Stage 4 (compile + run on the AI 100 card) is done on the Qualcomm server.
+CPU parity check for one causal LM: HF PyTorch -> QEff KV PyTorch -> ONNX export -> ONNX Runtime,
+with a token match at every stage. Compile and run on the card is Step 1 of the README.
 
-Usage: python causal_lm_parity.py MBZUAI/LaMini-GPT-124M [--prompt "..."] [--prompt-len 32] [--ctx-len 64]
+Usage: python causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code [--prompt "..."] [--prompt-len 8] [--ctx-len 32]
 """
 
 import argparse

@@ -1,7 +1,7 @@
 """
 Tiny random K2 Horizon model (remote code, reduced config) through the QEff stack:
 HF PyTorch -> QEff KV PyTorch -> ONNX export -> ONNX Runtime, token match on all three.
-Fast mechanics check for the wrapper before spending time on the real 7B weights.
+Fast mechanics check for the wrapper before spending time on the real weights.
 """
 
 import copy

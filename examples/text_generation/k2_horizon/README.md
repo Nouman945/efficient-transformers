@@ -176,49 +176,21 @@ The output must still read correctly at this precision; if it does not, go back 
 
 Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV cache (`--mxint8-kv-cache`). bf16 and FP8 are not AI 100 features, so use the bf16 Hub repo and let the compiler quantize; skip the `-FP8` repos. If an MXFP6 run degrades a model, `tools/mxfp6_probe.py` simulates MXFP6 on CPU per weight group or layer to find the sensitive part (that is how the 0.9B result was found).
 
-## Step 4: Benchmark (throughput, TTFT, ITL, Performance per Watt and per Dollar)
+## Step 4: Benchmark
 
-`run_benchmark.py` does the whole sweep in one command: sets the cache variables under `/local/mnt/workspace/$USER`, refuses to start if a device is busy, records the SDK version and QEfficient commit, runs every case (compile, one warm-up, `--repeats` timed runs with board power sampled), and writes one CSV per model plus `REPORT.md` with the tables.
+`run_benchmark.py` runs every case for every model (compile, warm-up, timed runs with board power sampled) and writes one CSV per model plus `REPORT.md`:
 
 ```csh
 python examples/text_generation/k2_horizon/run_benchmark.py --dry-run             # checks and plan, nothing compiled
-python examples/text_generation/k2_horizon/run_benchmark.py                       # all three sizes, default matrix
-python examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # all three sizes, 1024-token prompts, long outputs, 1 to 32 users
-
-python examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-7B      # one size
-python examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-3.7B
-python examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-0.9B
-python examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k mx_4dev_ctx4k_cb16 --repeats 5
-python examples/text_generation/k2_horizon/run_benchmark.py --card-price-usd 8000  # fills tok/s per dollar
-python examples/text_generation/k2_horizon/run_benchmark.py --report-only         # rebuild REPORT.md from the CSVs
+python examples/text_generation/k2_horizon/run_benchmark.py                       # 128-token prompts, 1 to 16 users
+python examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # 1024-token prompts, long outputs, 1 to 32 users
 ```
 
-Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_serving]/{REPORT.md, meta.json, IFM__K2-Horizon-7B.csv, ...}`. A rerun appends to the CSV and the report keeps the newest row per case; a failed case is listed under the table and the script exits 1.
+Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_serving]/REPORT.md`, with the CSVs and `meta.json` (SDK version, QEfficient commit, settings) next to it. `--models`, `--only`, `--repeats`, `--card-price-usd` (fills tok/s per dollar) and `--report-only` narrow or rerun; `--help` lists them.
 
-Matrices (`benchmark_matrix*.json`, one compile per distinct devices / precision / prefill / ctx / batch):
+The cases come from `benchmark_matrix*.json` (one file per workload, a separate one for the 0.9B because it runs fp16 instead of MXFP6). Each case is one compile: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching).
 
-| File | Models | Cases |
-|---|---|---|
-| `benchmark_matrix.json` | 7B, 3.7B | 128-token prompt, 256 out: fp16 1 device, MXFP6 + MXINT8 on 1 and 4 devices, 1k and 4k prompts, 4 / 8 / 16 users |
-| `benchmark_matrix_0_9b.json` | 0.9B | same shapes, fp16 + MXINT8 (MXFP6 degrades the 0.9B output) |
-| `benchmark_matrix_serving.json` | 7B, 3.7B | 1024 in / 1024 out, 1024 in / 10240 out, 10240 in / 1024 out, each at 1, 2, 4, 8, 16, 32 users |
-| `benchmark_matrix_serving_0_9b.json` | 0.9B | 1024 in / 128 out at 1 to 128 users, 1024 in / 1024 out at 1 to 32 users |
-
-Fields per case: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len` (65536 max), `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching with `full_batch_size`). The 10240-output cases take about 6 minutes per repeat per case.
-
-Columns in the report:
-
-| Column | Meaning |
-|---|---|
-| `ttft_s` | Time to first token, prefill of the whole prompt |
-| `decode_tok_s` | Decode tokens per second summed over all streams |
-| `decode_tok_s_per_stream` | What one user sees, `decode_tok_s / batch_size` |
-| `itl_ms` | Inter-token latency of one stream, `1000 / decode_tok_s_per_stream` (a mean, not a P50) |
-| `decode_board_w` | Peak board power during the timed runs, from `qaic-util -q` (one card, 4 devices, 150 W TDP; every device reports the whole board, so the max is taken, not the sum) |
-| `tok_s_per_w` | Performance per Watt, `decode_tok_s / decode_board_w` |
-| `tok_s_per_dollar` | `decode_tok_s / --card-price-usd`; the price is an input, agree it with the customer and say whether it is list price or hourly cost |
-
-Next to every number, state prompt tokens, generated tokens, batch size, devices, precision, `prefill_seq_len`, `ctx_len`, the SDK version and the QEfficient commit (all in `meta.json`). Nothing else may run on the card during a benchmark. When comparing with a serving run elsewhere, note that ours is a static batch of identical prompts through `generate()` and our ITL is a mean.
+The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all streams), `decode_tok_s_per_stream` (what one user sees), `itl_ms` (`1000 / per-stream tok/s`, a mean), `decode_board_w` (peak board power from `qaic-util -q`, 150 W TDP), `tok_s_per_w` (Performance per Watt), `tok_s_per_dollar` (needs `--card-price-usd`; agree the price with the customer). Nothing else may run on the card during a benchmark.
 
 ## Troubleshooting
 

@@ -202,7 +202,13 @@ The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all
 
 ## What the wrapper changes
 
-- `QEfficient/transformers/models/k2_horizon/modeling_k2_horizon.py`: KV cache attention (with the optional gate and QK norm used by larger sizes), grouped RMSNorm on the compiler custom op, static rotary tables.
-- `QEfficient/transformers/models/pytorch_transforms.py`: the K2 classes are mapped by name through `KVCacheExternalModuleMapperTransform`.
-- `QEfficient/transformers/modeling_utils.py`: `K2HorizonConfig` added to the external class mapping.
-- `tests/configs/causal_model_configs.json`, `QEfficient/utils/test_utils.py`: dummy-layer test config.
+The upstream PR is branch `k2-horizon-onboarding`; this folder is not part of it. The PR touches:
+
+- `QEfficient/transformers/models/k2_horizon/modeling_k2_horizon.py` (+ `__init__.py`): KV cache attention with the optional gate and QK norm, grouped RMSNorm on the compiler custom op, static rotary tables capped at 65536 positions, `get_specializations` that rejects a larger `ctx_len`, and refusal of the MoVA/MoE, partial-rotary and sliding-window configs.
+- `QEfficient/transformers/models/pytorch_transforms.py`: the five K2 classes mapped by name through `KVCacheExternalModuleMapperTransform` (remote code, so no class import).
+- `QEfficient/transformers/modeling_utils.py`: `K2HorizonConfig` in the external class mapping.
+- `QEfficient/utils/constants.py`: `K2_HORIZON_MAX_POSITION_EMBEDDINGS`.
+- `QEfficient/utils/test_utils.py`, `tests/configs/causal_model_configs.json`, `tests/golden_outputs/goldens.json`: the 7B and 0.9B as external test models, dummy-layer configs for both and the per-PR `k2_horizon_text` entry, with their HF goldens.
+- `tests/transformers/models/causal_lm_models/check_causal_models.py`: external models run the HF reference leg unless their entry sets `skip_hf_reference` (grok-1 keeps the skip).
+- `tests/unit_test/{utils/test_modeling_registry.py, models/test_new_arch_accuracy.py, transforms/test_transform_accuracy.py}`: registry and mapping checks, and the `ctx_len` cap.
+- `docs/source/validate.md`, `examples/text_generation/README.md`: the K2 Horizon row and run command.

@@ -10,8 +10,8 @@ Benchmark a K2 Horizon model on Cloud AI 100 over a matrix of configurations.
 
 For every entry in the matrix file: compile (cached by QEfficient), run a warm-up,
 then `--repeats` timed runs while sampling board power with qaic-util, and append
-one CSV row with TTFT, decode tokens/s, total tokens/s, board power and
-tokens/s per watt.
+one CSV row with TTFT, decode tokens/s, inter-token latency, total tokens/s,
+board power and tokens/s per watt.
 
     python benchmark.py --matrix benchmark_matrix.json --out results.csv
     python benchmark.py --matrix benchmark_matrix.json --only mx_4dev_ctx4k --repeats 5
@@ -50,6 +50,7 @@ CSV_FIELDS = [
     "total_tok_s",
     "e2e_s",
     "decode_tok_s_per_stream",
+    "itl_ms",
     "idle_board_w",
     "decode_board_w",
     "tok_s_per_w",
@@ -183,6 +184,7 @@ def run_case(case, args, tokenizer):
         "total_tok_s": round(total, 2),
         "e2e_s": round(e2e, 2),
         "decode_tok_s_per_stream": round(decode / batch_size, 2),
+        "itl_ms": round(1000 * batch_size / decode, 2),
         "idle_board_w": idle_w,
         "decode_board_w": decode_w,
         "tok_s_per_w": round(decode / decode_w, 4) if decode_w else "",

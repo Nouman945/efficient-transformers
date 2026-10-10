@@ -13,6 +13,7 @@ All numbers come from `QEfficient`'s own `perf_metrics` after `generate()`, plus
 | `ttft_s` | Time to first token: prefill of the whole prompt, seconds |
 | `decode_tok_s` | Decode throughput, tokens per second, summed over all streams in the batch |
 | `decode_tok_s_per_stream` | `decode_tok_s / batch_size`, what one user sees |
+| `itl_ms` | Inter-token latency of one stream, `1000 / decode_tok_s_per_stream`, mean over the decode |
 | `total_tok_s` | Generated tokens divided by prefill plus decode time |
 | `e2e_s` | Wall time of one `generate()` call |
 | `idle_board_w` | Board power before the timed runs |
@@ -38,6 +39,32 @@ Each case does one warm-up `generate()` (not timed) and then `--repeats` timed r
 | `mx_4dev_ctx4k_cb4` | 4 | MXFP6 + MXINT8 | 128 / 4096 | 128 | 4 | Continuous batching, 4 users |
 | `mx_4dev_ctx4k_cb8` | 4 | MXFP6 + MXINT8 | 128 / 4096 | 128 | 8 | 8 users |
 | `mx_4dev_ctx4k_cb16` | 4 | MXFP6 + MXINT8 | 128 / 4096 | 128 | 16 | 16 users |
+
+## H200 reference workloads (`--workload h200`)
+
+MBZUAI shared H200 serving numbers (SGLang, 1 x H200 TP1 for the dense sizes). `--workload h200` runs the same shapes on our card so the tables line up:
+
+| Matrix | Models | Cases |
+|---|---|---|
+| `benchmark_matrix_h200.json` | 7B, 3.7B | 1024 in / 1024 out, 1024 in / 10240 out, 10240 in / 1024 out, each at 1, 2, 4, 8, 16, 32 users, MXFP6 + MXINT8, 4 devices (18 cases) |
+| `benchmark_matrix_h200_0_9b.json` | 0.9B | 1024 in / 128 out at 1 to 128 users, 1024 in / 1024 out at 1 to 32 users, fp16 + MXINT8, 4 devices (14 cases) |
+
+```csh
+python examples/text_generation/k2_horizon/run_benchmark.py --workload h200 --dry-run
+python examples/text_generation/k2_horizon/run_benchmark.py --workload h200
+```
+
+Results go to `/local/mnt/workspace/$USER/k2_horizon_benchmark_h200/`, separate from the default matrix. The report has an `ITL ms` column (`1000 / per-stream tok/s`) next to their ITL P50.
+
+Run time: the 10240-output cases decode 10240 steps per repeat (about 6 minutes each at 30 tok/s per stream), and every case compiles its own QPC the first time. Start with the quick subset for all three models, then the full sweep:
+
+```csh
+python examples/text_generation/k2_horizon/run_benchmark.py --workload h200 --repeats 1 --only h200_in1k_out1k_c1 h200_in1k_out1k_c16 h200_in1k_out1k_c32 h200_in1k_out128_c1 h200_in1k_out128_c128
+```
+
+(`--only` ids that are not in a model's matrix are an error, so run the 7B/3.7B subset and the 0.9B subset as two commands if they differ.) A 32-user or 128-user case that does not fit in device memory fails and is listed under the table; the others still run.
+
+Differences that stay even with matching shapes: ours is a static batch of identical prompts through `generate()`, theirs is a serving run with request arrivals; our ITL is a mean, theirs a P50; our power is measured board power, their sheet has no power column (use the H200 TDP of 700 W and say so, or ask for `nvidia-smi` draw during their run).
 
 Fields per case: `devices` (list of device ids), `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len` (prompt tokens, a multiple of `prefill_seq_len` avoids a padded last chunk), `generation_len`, `batch_size` (1 = plain, more = continuous batching with `full_batch_size`).
 

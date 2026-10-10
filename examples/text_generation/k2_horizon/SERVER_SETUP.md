@@ -90,7 +90,7 @@ A bare `[0]` is a file pattern in csh and gives `python: No match.` The quoted f
 ## 6. First run
 
 ```csh
-python examples/text_generation/k2_horizon/k2_horizon_inference.py \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py \
     --model-name IFM/K2-Horizon-7B \
     --prompt "The capital of France is" \
     --prefill-seq-len 128 --ctx-len 4096 \

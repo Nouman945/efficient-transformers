@@ -2,7 +2,7 @@
 CPU parity check for one causal LM: HF PyTorch -> QEff KV PyTorch -> ONNX export -> ONNX Runtime,
 with a token match at every stage. Compile and run on the card is Step 1 of the README.
 
-Usage: python causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code [--prompt "..."] [--prompt-len 8] [--ctx-len 32]
+Usage: python3 causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code [--prompt "..."] [--prompt-len 8] [--ctx-len 32]
 """
 
 import argparse

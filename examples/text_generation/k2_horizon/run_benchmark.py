@@ -12,11 +12,11 @@ One command does the whole flow: cache variables, idle-card check, SDK and commi
 record, the matrix per model through benchmark.py, one CSV per model and a
 Markdown report with every table.
 
-    python run_benchmark.py                                   # 7B, 3.7B, 0.9B, default matrices
-    python run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
-    python run_benchmark.py --workload serving                # 1024-token prompts, long outputs, up to 32 users
-    python run_benchmark.py --dry-run                         # checks and plan only, no compile
-    python run_benchmark.py --report-only                     # rebuild REPORT.md from the CSVs
+    python3 run_benchmark.py                                   # 7B, 3.7B, 0.9B, default matrices
+    python3 run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
+    python3 run_benchmark.py --workload serving                # 1024-token prompts, long outputs, up to 32 users
+    python3 run_benchmark.py --dry-run                         # checks and plan only, no compile
+    python3 run_benchmark.py --report-only                     # rebuild REPORT.md from the CSVs
 
 Results land in <workspace>/k2_horizon_benchmark/ (workspace defaults to
 /local/mnt/workspace/$USER). Run it from the repo's venv.

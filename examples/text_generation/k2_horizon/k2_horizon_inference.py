@@ -37,7 +37,7 @@ def main():
     parser.add_argument(
         "--node-precision-info",
         default=None,
-        help="Compiler NPI yaml; matmuls listed there keep full precision under --mxfp6 (see configs/)",
+        help="Compiler NPI yaml; matmuls listed there keep full precision under --mxfp6",
     )
     parser.add_argument("--compile-only", action="store_true")
     args = parser.parse_args()

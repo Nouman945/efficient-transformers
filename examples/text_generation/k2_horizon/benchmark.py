@@ -203,9 +203,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3, help="Timed runs per case, after one warm-up")
     parser.add_argument("--num-cores", type=int, default=16)
     parser.add_argument("--card-price-usd", type=float, default=None, help="Card price for tokens/s per dollar")
-    parser.add_argument(
-        "--node-precision-info", default=None, help="Compiler NPI yaml applied to every MXFP6 case (see configs/)"
-    )
+    parser.add_argument("--node-precision-info", default=None, help="Compiler NPI yaml applied to every MXFP6 case")
     args = parser.parse_args()
 
     cases = json.loads(Path(args.matrix).read_text())

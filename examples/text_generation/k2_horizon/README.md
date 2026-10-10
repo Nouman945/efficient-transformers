@@ -81,9 +81,9 @@ The models are remote code, so every load passes `trust_remote_code`. Without it
 
 ```csh
 cd examples/text_generation/k2_horizon
-python tools/causal_lm_parity.py IFM/K2-Horizon-0.9B --trust-remote-code --prompt-len 8 --ctx-len 32
-python tools/causal_lm_parity.py IFM/K2-Horizon-3.7B --trust-remote-code --prompt-len 8 --ctx-len 32
-python tools/causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code --prompt-len 8 --ctx-len 32
+python3 tools/causal_lm_parity.py IFM/K2-Horizon-0.9B --trust-remote-code --prompt-len 8 --ctx-len 32
+python3 tools/causal_lm_parity.py IFM/K2-Horizon-3.7B --trust-remote-code --prompt-len 8 --ctx-len 32
+python3 tools/causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code --prompt-len 8 --ctx-len 32
 cd ../../..
 ```
 
@@ -94,20 +94,20 @@ The ONNX leg runs in fp32 and needs about 36 GB of host RAM for the 7B. On a sma
 Start without MXFP6 so the first run is a precision check, not a performance run. One command per model:
 
 ```csh
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
     --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --num-cores 16 --device-group '[0]'
 
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-3.7B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-3.7B \
     --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --num-cores 16 --device-group '[0]'
 
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
     --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --num-cores 16 --device-group '[0]'
 ```
 
 The same thing through the CLI (replace the model name as needed):
 
 ```csh
-python -m QEfficient.cloud.infer --model_name IFM/K2-Horizon-7B --trust_remote_code \
+python3 -m QEfficient.cloud.infer --model_name IFM/K2-Horizon-7B --trust_remote_code \
     --batch_size 1 --prompt_len 128 --ctx_len 4096 --num_cores 16 --device_group '[0]' \
     --prompt "The capital of France is" --mos 1 --aic_enable_depth_first
 ```
@@ -159,15 +159,15 @@ Compare the first 20 or so tokens. fp16 on the card and bf16 on CPU can drift on
 Switch on the production precision and read the metrics that `generate()` prints. The 7B and 3.7B take MXFP6 weights; the 0.9B keeps fp16 weights:
 
 ```csh
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
     --prefill-seq-len 128 --ctx-len 4096 --generation-len 256 --num-cores 16 --device-group '[0,1,2,3]' \
     --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions
 
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-3.7B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-3.7B \
     --prefill-seq-len 128 --ctx-len 4096 --generation-len 256 --num-cores 16 --device-group '[0,1,2,3]' \
     --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions
 
-python examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-0.9B \
     --prefill-seq-len 128 --ctx-len 4096 --generation-len 256 --num-cores 16 --device-group '[0,1,2,3]' \
     --mxint8-kv-cache --use-onnx-subfunctions
 ```
@@ -181,9 +181,9 @@ Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV ca
 `run_benchmark.py` runs every case for every model (compile, warm-up, timed runs with board power sampled) and writes one CSV per model plus `REPORT.md`:
 
 ```csh
-python examples/text_generation/k2_horizon/run_benchmark.py --dry-run             # checks and plan, nothing compiled
-python examples/text_generation/k2_horizon/run_benchmark.py                       # 128-token prompts, 1 to 16 users
-python examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # 1024-token prompts, long outputs, 1 to 32 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py --dry-run             # checks and plan, nothing compiled
+python3 examples/text_generation/k2_horizon/run_benchmark.py                       # 128-token prompts, 1 to 16 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # 1024-token prompts, long outputs, 1 to 32 users
 ```
 
 Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_serving]/REPORT.md`, with the CSVs and `meta.json` (SDK version, QEfficient commit, settings) next to it. `--models`, `--only`, `--repeats`, `--card-price-usd` (fills tok/s per dollar) and `--report-only` narrow or rerun; `--help` lists them.

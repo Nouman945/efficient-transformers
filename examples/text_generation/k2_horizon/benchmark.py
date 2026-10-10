@@ -13,8 +13,8 @@ then `--repeats` timed runs while sampling board power with qaic-util, and appen
 one CSV row with TTFT, decode tokens/s, inter-token latency, total tokens/s,
 board power and tokens/s per watt.
 
-    python benchmark.py --matrix benchmark_matrix.json --out results.csv
-    python benchmark.py --matrix benchmark_matrix.json --only mx_4dev_ctx4k --repeats 5
+    python3 benchmark.py --matrix benchmark_matrix.json --out results.csv
+    python3 benchmark.py --matrix benchmark_matrix.json --only mx_4dev_ctx4k --repeats 5
 """
 
 import argparse

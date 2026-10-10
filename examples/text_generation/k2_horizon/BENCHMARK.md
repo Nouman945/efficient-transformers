@@ -1,6 +1,6 @@
-# Benchmarking K2-Horizon-7B on Cloud AI 100 Ultra
+# Benchmarking K2 Horizon on Cloud AI 100 Ultra
 
-How to produce the benchmark numbers for `IFM/K2-Horizon-7B`: throughput, latency, Performance per Watt and Performance per Dollar, over a fixed matrix of configurations. Everything runs from `benchmark.py` in this folder and lands in one CSV.
+How to produce the benchmark numbers for `IFM/K2-Horizon-7B`, `3.7B` and `0.9B`: throughput, latency, Performance per Watt and Performance per Dollar, over a fixed matrix of configurations. One command, `run_benchmark.py` in this folder, does the whole thing and writes a report.
 
 Do [SERVER_SETUP.md](SERVER_SETUP.md) first (caches on the local disk, csh notes). The model must already have passed [README.md](README.md) Step 1 on this host.
 

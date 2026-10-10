@@ -45,30 +45,32 @@ Every distinct combination of devices, precision, prefill, ctx and batch size is
 
 ## Run it
 
+One command, `run_benchmark.py`. It sets `HF_HOME`, `QEFF_HOME` and `QEFF_LOG_PATH` under `/local/mnt/workspace/$USER` (values already in the environment win), refuses to start if a device is not `Ready` or has a network active, records the SDK version and the QEfficient commit, runs the matrix for each model (the 0.9B gets `benchmark_matrix_0_9b.json`, fp16 + MXINT8), and writes one CSV per model plus `REPORT.md` with the tables.
+
 ```csh
 cd ~/efficient-transformers
 source qeff_env/bin/activate.csh
-setenv HF_HOME /local/mnt/workspace/nrasheed/hf
-setenv QEFF_HOME /local/mnt/workspace/nrasheed/qeff_cache
-setenv QEFF_LOG_PATH /local/mnt/workspace/nrasheed/qeff_logs
 
-python examples/text_generation/k2_horizon/benchmark.py \
-    --matrix examples/text_generation/k2_horizon/benchmark_matrix.json \
-    --out /local/mnt/workspace/nrasheed/k2_horizon_benchmark.csv \
-    --repeats 3
+python examples/text_generation/k2_horizon/run_benchmark.py --dry-run   # checks and plan, nothing compiled
+python examples/text_generation/k2_horizon/run_benchmark.py             # 7B, 3.7B, 0.9B, full matrices
 ```
+
+Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark/{REPORT.md, meta.json, IFM__K2-Horizon-7B.csv, ...}`.
 
 Useful variants:
 
 ```csh
-# one case only, more repeats
-python examples/text_generation/k2_horizon/benchmark.py --only mx_4dev_ctx4k --repeats 5 --out /local/mnt/workspace/nrasheed/k2.csv
+# one model, one case, more repeats
+python examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
 
 # with a card price so tokens/s per dollar is filled in (price is an input, agree it with the customer)
-python examples/text_generation/k2_horizon/benchmark.py --card-price-usd 8000 --out /local/mnt/workspace/nrasheed/k2.csv
+python examples/text_generation/k2_horizon/run_benchmark.py --card-price-usd 8000
+
+# rebuild REPORT.md from the CSVs without running anything
+python examples/text_generation/k2_horizon/run_benchmark.py --report-only
 ```
 
-The script appends one row per case and prints the row as JSON. A case that fails (compile error, out of memory) is printed and skipped; the others still run. Nothing else must be running on the card during the timed runs, or the power and throughput numbers are off.
+A rerun appends to the CSV and the report keeps the newest row per case. A case that fails (compile error, out of memory) is listed under the table and the script exits 1; the others still run. `benchmark.py` underneath is the single-matrix engine and can still be called on its own.
 
 ## Report
 
@@ -100,4 +102,4 @@ For Performance per Dollar: `decode_tok_s / price`. Decide with the customer whe
 
 ## Codex prompt
 
-> In ~/efficient-transformers on branch k2-horizon-server-docs, follow examples/text_generation/k2_horizon/BENCHMARK.md. Set the three cache variables as in SERVER_SETUP.md, then run benchmark.py over the full matrix with `--repeats 3` and `--out /local/mnt/workspace/nrasheed/k2_horizon_benchmark.csv`. Make sure nothing else is using the cards first (`qaic-util -q` shows Networks Active:0). Report the CSV contents, any case that failed with its error, and the SDK version from `qaic-version-util --apps`. Do not change source files, do not push.
+> In ~/efficient-transformers on branch k2-horizon-server-docs, activate qeff_env (csh) and run `python examples/text_generation/k2_horizon/run_benchmark.py --dry-run`. If it reports no problems, run it again without `--dry-run`. Report the contents of /local/mnt/workspace/$USER/k2_horizon_benchmark/REPORT.md and meta.json, and any failed case with its error. Do not change source files, do not push.

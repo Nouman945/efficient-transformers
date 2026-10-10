@@ -22,6 +22,23 @@ The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16
 
 The wrapper covers the dense sizes (0.9B, 3.7B, 7B, 32B). The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
 
+## Files in this folder
+
+| File | Purpose |
+|---|---|
+| `README.md` | this guide: onboarding, validation and benchmark steps for the three sizes |
+| `SERVER_SETUP.md` | first-time setup on the shared server: csh, home quota, caches on the local disk |
+| `k2_horizon_inference.py` | compile and run one model on the card, prints the output and `perf_metrics` (Steps 1 and 3) |
+| `run_benchmark.py` | the benchmark: runs every case for every model, writes CSVs and `REPORT.md` (Step 4) |
+| `benchmark.py` | single-matrix engine used by `run_benchmark.py`; can be run on its own |
+| `benchmark_matrix.json`, `benchmark_matrix_0_9b.json` | default cases, 128-token prompt (MXFP6 for 7B and 3.7B, fp16 for the 0.9B) |
+| `benchmark_matrix_serving.json`, `benchmark_matrix_serving_0_9b.json` | 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B) |
+| `tools/causal_lm_parity.py` | CPU parity check, HF PyTorch vs QEff PyTorch vs ONNX Runtime (Step 0) |
+| `tools/k2_tiny_check.py` | the same three stages on a tiny random K2 config, seconds to run, for wrapper changes |
+| `tools/mxfp6_probe.py` | simulates MXFP6 weights on CPU per layer or weight group to find what degrades a model |
+
+The wrapper itself is in `QEfficient/transformers/models/k2_horizon/` (see the last section).
+
 ## Prerequisites
 
 First time on a shared server (csh, home quota, local disk)? Do [SERVER_SETUP.md](SERVER_SETUP.md) first.

@@ -2,10 +2,10 @@
 Simulate MXFP6 (E2M3 elements, 32-element blocks with a shared power-of-two scale, OCP MX spec)
 on the matmul weights of a model and see which weights make greedy decoding go wrong.
 
-    python mxfp6_probe.py IFM/K2-Horizon-0.9B                 # all linear weights quantized
-    python mxfp6_probe.py IFM/K2-Horizon-0.9B --only mlp      # only gate/up/down
-    python mxfp6_probe.py IFM/K2-Horizon-0.9B --skip-layers 0,1,2,3
-    python mxfp6_probe.py IFM/K2-Horizon-0.9B --stats         # per-weight block dynamic range, no generation
+    python3 mxfp6_probe.py IFM/K2-Horizon-0.9B                 # all linear weights quantized
+    python3 mxfp6_probe.py IFM/K2-Horizon-0.9B --only mlp      # only gate/up/down
+    python3 mxfp6_probe.py IFM/K2-Horizon-0.9B --skip-layers 0,1,2,3
+    python3 mxfp6_probe.py IFM/K2-Horizon-0.9B --stats         # per-weight block dynamic range, no generation
 """
 
 import argparse

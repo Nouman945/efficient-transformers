@@ -20,7 +20,7 @@ The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16
 | `IFM/K2-Horizon-3.7B` | 36 | 2560 | 10 GB | 4 GB | MXFP6 + MXINT8 KV | same architecture as the 7B, the 250k vocabulary is most of the weight |
 | `IFM/K2-Horizon-7B` | 36 | 4096 | 18 GB | 7 GB | MXFP6 + MXINT8 KV | |
 
-The wrapper covers the dense sizes (0.9B, 3.7B, 7B, 32B). The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
+The wrapper covers the dense sizes; 0.9B, 3.7B and 7B are validated, the 32B has the same architecture but has not been run. The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
 
 ## Files in this folder
 

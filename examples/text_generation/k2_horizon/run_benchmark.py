@@ -14,6 +14,7 @@ Markdown report with every table.
 
     python run_benchmark.py                                   # 7B, 3.7B, 0.9B, default matrices
     python run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
+    python run_benchmark.py --workload h200                   # the MBZUAI H200 reference workloads
     python run_benchmark.py --dry-run                         # checks and plan only, no compile
     python run_benchmark.py --report-only                     # rebuild REPORT.md from the CSVs
 
@@ -38,9 +39,12 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 QAIC_TOOLS = Path("/opt/qti-aic/tools")
 DEFAULT_MODELS = ["IFM/K2-Horizon-7B", "IFM/K2-Horizon-3.7B", "IFM/K2-Horizon-0.9B"]
-# the 0.9B degrades with MXFP6 weights, its matrix uses fp16 + MXINT8 instead
-MATRIX_FOR_MODEL = {"IFM/K2-Horizon-0.9B": "benchmark_matrix_0_9b.json"}
-DEFAULT_MATRIX = "benchmark_matrix.json"
+# the 0.9B degrades with MXFP6 weights, its matrices use fp16 + MXINT8 instead
+# "h200" mirrors the workloads of the MBZUAI H200 reference sheet (1024-token prompts, up to 32 users)
+WORKLOADS = {
+    "default": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_0_9b.json", None: "benchmark_matrix.json"},
+    "h200": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_h200_0_9b.json", None: "benchmark_matrix_h200.json"},
+}
 MAX_CTX_LEN = 65536  # K2_HORIZON_MAX_POSITION_EMBEDDINGS
 
 REPORT_COLUMNS = [
@@ -53,6 +57,7 @@ REPORT_COLUMNS = [
     ("ttft_s", "TTFT s"),
     ("decode_tok_s", "Decode tok/s"),
     ("decode_tok_s_per_stream", "Per stream"),
+    ("itl_ms", "ITL ms"),
     ("decode_board_w", "Board W"),
     ("tok_s_per_w", "tok/s per W"),
     ("tok_s_per_dollar", "tok/s per $"),
@@ -176,6 +181,11 @@ def benchmark_model(model_name, cases, args, out_csv):
         node_precision_info=args.node_precision_info,
     )
     failures = []
+    if out_csv.exists():
+        with out_csv.open(newline="") as f:
+            header = next(csv.reader(f), [])
+        if header != benchmark.CSV_FIELDS:  # columns changed since that file was written, keep it aside
+            out_csv.rename(out_csv.with_suffix(".old.csv"))
     write_header = not out_csv.exists()
     for case in cases:
         print(f"\n=== {model_name} / {case['id']} ===", flush=True)
@@ -221,7 +231,7 @@ def write_report(out_dir, models, failures):
         ]
     lines += [
         "Decode tok/s is the sum over all streams; per stream is what one user sees. Board W is the peak board "
-        "power sampled during the timed runs (one card, 4 devices, 150 W TDP). tok/s per W = decode tok/s / board W.",
+        "power sampled during the timed runs (one card, 4 devices, 150 W TDP). tok/s per W = decode tok/s / board W. ITL is the mean time between two tokens of one stream.",
         "",
     ]
     columns = REPORT_COLUMNS
@@ -256,7 +266,8 @@ def write_report(out_dir, models, failures):
 def main():
     parser = argparse.ArgumentParser(description="K2 Horizon end-to-end benchmark on Cloud AI 100 Ultra")
     parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS)
-    parser.add_argument("--matrix", help="matrix file for every model (default: per-model choice)")
+    parser.add_argument("--workload", choices=sorted(WORKLOADS), default="default", help="which matrix set to run")
+    parser.add_argument("--matrix", help="matrix file for every model (overrides --workload)")
     parser.add_argument("--only", nargs="*", help="run only these case ids")
     parser.add_argument("--repeats", type=int, default=3, help="timed runs per case after one warm-up")
     parser.add_argument("--num-cores", type=int, default=16)
@@ -265,13 +276,14 @@ def main():
     parser.add_argument(
         "--workspace", default=f"/local/mnt/workspace/{getpass.getuser()}", help="local disk for caches and results"
     )
-    parser.add_argument("--out-dir", help="results folder (default: <workspace>/k2_horizon_benchmark)")
+    parser.add_argument("--out-dir", help="results folder (default: <workspace>/k2_horizon_benchmark[_<workload>])")
     parser.add_argument("--dry-run", action="store_true", help="checks and plan only, no compile or run")
     parser.add_argument("--report-only", action="store_true", help="rebuild REPORT.md from existing CSVs")
     args = parser.parse_args()
 
     workspace = Path(args.workspace)
-    out_dir = Path(args.out_dir) if args.out_dir else workspace / "k2_horizon_benchmark"
+    suffix = "" if args.workload == "default" else f"_{args.workload}"
+    out_dir = Path(args.out_dir) if args.out_dir else workspace / f"k2_horizon_benchmark{suffix}"
     if args.report_only:
         report = write_report(out_dir, args.models, {})
         print(report)
@@ -286,7 +298,8 @@ def main():
 
     plan = []
     for model_name in args.models:
-        matrix = Path(args.matrix) if args.matrix else HERE / MATRIX_FOR_MODEL.get(model_name, DEFAULT_MATRIX)
+        matrices = WORKLOADS[args.workload]
+        matrix = Path(args.matrix) if args.matrix else HERE / matrices.get(model_name, matrices[None])
         plan.append((model_name, matrix, load_matrix(matrix, args.only)))
     devices = {d for _, _, cases in plan for c in cases for d in c["devices"]}
 

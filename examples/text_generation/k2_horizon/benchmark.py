@@ -115,11 +115,65 @@ class PowerSampler:
         return max(self.samples) if self.samples else None
 
 
+PROMPT_TEXT = """
+The history of the printing press begins in the middle of the fifteenth century, when a goldsmith in Mainz
+combined movable metal type, an oil-based ink and a modified wine press into a single workflow. Within fifty
+years presses were running in more than two hundred European cities, and the cost of a book fell to a fraction
+of what a hand-copied manuscript had demanded. Scholars could now compare editions, printers competed on
+accuracy, and errors that had once propagated silently from copy to copy became visible and correctable.
+
+A modern transformer language model processes text as a sequence of integer tokens. During the prefill phase
+the whole prompt is pushed through the network at once, and the attention layers store a key and a value tensor
+for every token in every layer. During decode the model produces one token at a time, reading the stored cache
+instead of recomputing earlier positions. Prefill is bound by compute, decode is bound by memory bandwidth, and
+the balance between the two decides which hardware is the better fit for a given workload.
+
+Coffee cultivation spread from the Ethiopian highlands to Yemen, where the beans were first roasted and brewed in
+the form we recognise today. Coffee houses opened in Istanbul, then in Venice, London and Vienna, and became
+places where merchants traded news, insurers priced ships and pamphleteers argued about politics. The drink was
+banned more than once by rulers who distrusted the conversations it encouraged, and each ban failed.
+
+The orbit of a satellite is set by its altitude and inclination. A low orbit at a few hundred kilometres completes
+a lap in about ninety minutes and sees a narrow strip of the surface on each pass, which suits imaging and
+weather observation. A geostationary orbit at roughly thirty-six thousand kilometres matches the rotation of the
+planet, so the satellite appears fixed in the sky and a single antenna on the ground can stay pointed at it
+without tracking. Between the two sit the navigation constellations, whose clocks must be corrected for both
+special and general relativity or their position fixes would drift by kilometres within a day.
+
+Sourdough bread rises because wild yeast and lactic acid bacteria ferment the sugars in flour. The yeast produces
+carbon dioxide that is trapped by the gluten network, while the bacteria produce acids that give the crumb its
+flavour and slow the growth of moulds. A baker keeps the culture alive by discarding part of it and feeding the
+rest with fresh flour and water, and the ratio of flour to water to starter, together with the temperature of the
+kitchen, controls how fast the dough proves.
+
+Compilers for accelerator hardware translate a dataflow graph into a schedule of kernels, buffers and transfers.
+The scheduler decides which tensors stay on chip, which spill to external memory and how operations are fused so
+that intermediate results never leave the cores. A graph that fits in on-chip memory runs at the speed of the
+arithmetic units; one that does not is paced by the memory interface. Quantisation shrinks the weights and the
+cache so that more of the working set fits, and the trade is a small loss of precision for a large gain in
+throughput.
+
+The Silk Road was never a single road but a web of routes linking Chang'an with the Mediterranean through the
+oases of Central Asia. Silk went west, but so did paper, gunpowder and the compass; glass, horses, silver and
+religions went east. Caravans rarely travelled the full distance. Goods changed hands many times, and each
+intermediary added a margin, so by the time a bolt of silk reached Rome it was worth its weight in gold.
+"""
+
+
 def build_prompt(tokenizer, input_len):
-    """A prompt that tokenizes to exactly input_len tokens including the BOS token."""
-    base = "The quick brown fox jumps over the lazy dog. "
-    ids = tokenizer(base * (input_len // 4 + 2), add_special_tokens=False)["input_ids"][: input_len - 1]
-    return tokenizer.decode(ids)
+    """A prose prompt that tokenizes to exactly input_len tokens including the BOS token."""
+    body = " ".join(PROMPT_TEXT.split())
+    ids = tokenizer(body, add_special_tokens=False)["input_ids"]
+    ids = ids * (input_len // len(ids) + 1)
+    take = input_len - 1
+    prompt = ""
+    for _ in range(8):
+        prompt = tokenizer.decode(ids[:take])
+        got = len(tokenizer(prompt)["input_ids"])
+        if got == input_len:
+            break
+        take += input_len - got
+    return prompt
 
 
 def run_case(case, args, tokenizer):

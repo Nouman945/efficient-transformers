@@ -24,7 +24,7 @@ The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16
 
 The names count non-embedding parameters; the 250k-token vocabulary adds 1.3 to 2.6B on top, so the "7B" is a 9B model in memory and at the lm_head. Keep that in mind when comparing with other 7B-class models. All four are Apache-2.0, bf16 safetensors, not gated, and ship a chat template; `eos_token_id` is `[1, 250019]` for the 3.7B, 7B and 32B and `1` for the 0.9B.
 
-The wrapper covers the dense sizes. The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
+The wrapper covers these four dense sizes only; a config with experts is refused at load.
 
 ## Files in this folder
 
@@ -224,7 +224,7 @@ The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all
 
 The upstream PR is branch `k2-horizon-onboarding`; this folder is not part of it. The PR touches:
 
-- `QEfficient/transformers/models/k2_horizon/modeling_k2_horizon.py` (+ `__init__.py`): KV cache attention with the optional gate and QK norm, grouped RMSNorm on the compiler custom op, static rotary tables capped at 65536 positions, `get_specializations` that rejects a larger `ctx_len`, and refusal of the MoVA/MoE, partial-rotary and sliding-window configs.
+- `QEfficient/transformers/models/k2_horizon/modeling_k2_horizon.py` (+ `__init__.py`): KV cache attention with the optional gate and QK norm, grouped RMSNorm on the compiler custom op, static rotary tables capped at 65536 positions, `get_specializations` that rejects a larger `ctx_len`, and refusal of configs with experts, partial rotary or sliding window.
 - `QEfficient/transformers/models/pytorch_transforms.py`: the five K2 classes mapped by name through `KVCacheExternalModuleMapperTransform` (remote code, so no class import).
 - `QEfficient/transformers/modeling_utils.py`: `K2HorizonConfig` in the external class mapping.
 - `QEfficient/utils/constants.py`: `K2_HORIZON_MAX_POSITION_EMBEDDINGS`.

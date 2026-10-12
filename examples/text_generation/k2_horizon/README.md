@@ -13,7 +13,7 @@ How to onboard, validate and benchmark the dense K2 Horizon models (`IFM/K2-Hori
 | `IFM/K2-Horizon-3.7B` | 23.4 tok/s | 65.9 tok/s, TTFT 0.04 s | 385 / 24 tok/s | 2.9 |
 | `IFM/K2-Horizon-0.9B` | 45.8 tok/s | 134.9 tok/s, TTFT 0.03 s | 1070 / 67 tok/s | 9.1 |
 
-The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16/fp32 lanes; the bf16 lane targets AI 200 and cannot compile on an AI 100-only host.
+The repo tests on AI 100 pass for the dummy (random weights) and per-PR fp16/fp32 lanes on the 0.9B and 7B; the real-weight few and full lanes for all four sizes are the next run (Step 2). The bf16 lane targets AI 200 and cannot compile on an AI 100-only host.
 
 | Model | Params (Hub) | Layers | Hidden | Weights fp16 | Weights MXFP6 | KV per token (MXINT8) | Precision to use | Notes |
 |---|---|---|---|---|---|---|---|---|
@@ -129,27 +129,45 @@ The first run exports the ONNX (a few minutes) and compiles the QPC (longer). Bo
 
 ## Step 2: token match against Hugging Face (repo tests)
 
-The repo tests build a reduced random model of each configuration, run HF PyTorch, QEff PyTorch, ONNX Runtime and the card, and assert the tokens match. Run from the repo root, with the same `HF_HOME` and `QEFF_HOME` as above, and without `-n auto` (the card tests must run one at a time):
+The repo tests run the same model four ways, HF PyTorch, QEff PyTorch, ONNX Runtime and the card, and assert the generated tokens are identical. There are three lanes per model. Run from the repo root, with the same `HF_HOME` and `QEFF_HOME` as above, and without `-n auto` (the card tests must run one at a time):
+
+| Lane | `-k` | Weights | What it proves |
+|---|---|---|---|
+| dummy | `"K2-Horizon-<size> and dummy"` | random, 2 layers, real config features | the wrapper's math (grouped norm, rope, GQA, CB) |
+| few | `"K2-Horizon-<size> and few"` | real checkpoint, first layer only | real weights load and match through the whole pipeline; 4 tests: plain, CB, and a 2-partition MDP compile with and without ONNX subfunctions |
+| full | `"K2-Horizon-<size> and full"` | real checkpoint, all layers, fp32, 4 devices | the full model on the card equals Hugging Face token for token; 2 tests: plain and CB |
+
+All four sizes are registered (`ModelConfig.EXTERNAL_MODELS` and `tests/configs/causal_model_configs.json`). Dummy and few lanes for every size:
 
 ```csh
-setenv QEFF_REGENERATE_GOLDEN 1
-pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon-7B and dummy" -v
-pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon-0.9B and dummy" -v
+foreach size (0.9B 3.7B 7B 32B)
+    pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon-$size and dummy" -v
+    pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon-$size and few" -v
+end
+```
+
+Full lanes, one size at a time. Each loads the checkpoint in fp32 on the host twice (HF reference plus the export copy), so the 0.9B, 3.7B and 7B need up to 80 GB of RAM and the 32B about 300 GB. Skip the 32B full lane if the host cannot hold it; the few lane plus the Step 1 text check stand in for it.
+
+```csh
+pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K2-Horizon-7B and full" -v
+```
+
+The per-PR lanes (continuous batching, ONNX subfunctions, CCL, fp16 and fp32 export) run on the 7B dummy shape:
+
+```csh
 pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "k2_horizon_text" -v
 ```
 
-- `K2-Horizon-7B and dummy`: the 7B configuration (head_dim 128, gate and QK norm). The 3.7B and 32B have the same architecture and config features, so this test covers them too.
-- `K2-Horizon-0.9B and dummy`: the 0.9B configuration (head_dim 64, YaRN rope).
-- `k2_horizon_text`: the per-PR lanes on the 7B: continuous batching, ONNX subfunctions, CCL, fp16 and fp32 export. The speculative-decoding case is an expected xfail; the bf16 lane fails on an AI 100-only host for every model.
+The speculative-decoding case is an expected xfail. The bf16 case compiles for AI 200 (the test picks the target from the dtype) and fails on an AI 100-only host for every model.
 
-`QEFF_REGENERATE_GOLDEN=1` writes the HF reference tokens into `tests/golden_outputs/goldens.json`. If the file changed, commit it, it is part of the PR:
+Each lane takes its Hugging Face reference tokens from `tests/golden_outputs/goldens.json`; a missing entry is computed on the CPU and written on first use. Set `QEFF_REGENERATE_GOLDEN 1` only after a change that alters the model output. `QEFF_RUN_CPU_REFERENCES 1` also runs the QEff PyTorch and ONNX Runtime legs live instead of trusting the golden. If the file changed, commit it, it is part of the PR:
 
 ```csh
 git add tests/golden_outputs/goldens.json
-git commit -s -m "K2 Horizon: update goldens"
+git commit -s -m "K2 Horizon: goldens for the 3.7B and 32B lanes"
 ```
 
-For the real weights, compare the card output of Step 1 with a greedy Hugging Face run of the same prompt:
+For a quick real-weight read on any size, compare the card output of Step 1 with a greedy Hugging Face run of the same prompt:
 
 ```python
 import torch

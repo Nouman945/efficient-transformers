@@ -15,12 +15,14 @@ How to onboard, validate and benchmark the dense K2 Horizon models (`IFM/K2-Hori
 
 The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16/fp32 lanes; the bf16 lane targets AI 200 and cannot compile on an AI 100-only host.
 
-| Model | Layers | Hidden | Weights fp16 | Weights MXFP6 | Precision to use | Notes |
-|---|---|---|---|---|---|---|
-| `IFM/K2-Horizon-0.9B` | 28 | 1536 | 2.2 GB | not used | fp16 + MXINT8 KV | MXFP6 degrades the output (the first four layers are the sensitive ones), so run it without `--mxfp6` |
-| `IFM/K2-Horizon-3.7B` | 36 | 2560 | 10 GB | 4 GB | MXFP6 + MXINT8 KV | same architecture as the 7B, the 250k vocabulary is most of the weight |
-| `IFM/K2-Horizon-7B` | 36 | 4096 | 18 GB | 7 GB | MXFP6 + MXINT8 KV | |
-| `IFM/K2-Horizon-32B` | 64 | 5120 | 70 GB | 27 GB | MXFP6 + MXINT8 KV | 64 heads / 8 KV heads; needs all 4 devices (fp16 or MXFP6), the fp32 export needs about 140 GB of host RAM |
+| Model | Params (Hub) | Layers | Hidden | Weights fp16 | Weights MXFP6 | KV per token (MXINT8) | Precision to use | Notes |
+|---|---|---|---|---|---|---|---|---|
+| `IFM/K2-Horizon-0.9B` | 1.08B | 28 | 1536 | 2.2 GB | not used | 28 KB | fp16 + MXINT8 KV | MXFP6 degrades the output (the first four layers are the sensitive ones), so run it without `--mxfp6` |
+| `IFM/K2-Horizon-3.7B` | 5.06B | 36 | 2560 | 10 GB | 4 GB | 72 KB | MXFP6 + MXINT8 KV | same architecture as the 7B, the 250k vocabulary is a quarter of the weight |
+| `IFM/K2-Horizon-7B` | 9.00B | 36 | 4096 | 18 GB | 7 GB | 72 KB | MXFP6 + MXINT8 KV | |
+| `IFM/K2-Horizon-32B` | 34.8B | 64 | 5120 | 70 GB | 27 GB | 128 KB | MXFP6 + MXINT8 KV | 64 heads / 8 KV heads; needs all 4 devices (fp16 or MXFP6), the fp32 export needs about 140 GB of host RAM |
+
+The names count non-embedding parameters; the 250k-token vocabulary adds 1.3 to 2.6B on top, so the "7B" is a 9B model in memory and at the lm_head. Keep that in mind when comparing with other 7B-class models. All four are Apache-2.0, bf16 safetensors, not gated, and ship a chat template; `eos_token_id` is `[1, 250019]` for the 3.7B, 7B and 32B and `1` for the 0.9B.
 
 The wrapper covers the dense sizes. The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
 

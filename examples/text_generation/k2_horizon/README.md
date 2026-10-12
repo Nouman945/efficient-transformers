@@ -1,13 +1,14 @@
 # K2 Horizon on Cloud AI 100 Ultra
 
-How to onboard, validate and benchmark the dense K2 Horizon models (`IFM/K2-Horizon-0.9B`, `IFM/K2-Horizon-3.7B`, `IFM/K2-Horizon-7B`) on a server with Cloud AI 100 Ultra cards. Every step below is run on the server; the commands are given for all three sizes.
+How to onboard, validate and benchmark the dense K2 Horizon models (`IFM/K2-Horizon-0.9B`, `IFM/K2-Horizon-3.7B`, `IFM/K2-Horizon-7B`, `IFM/K2-Horizon-32B`) on a server with Cloud AI 100 Ultra cards. Every step below is run on the server; the commands are given for all four sizes.
 
 ## Status
 
-All three sizes are onboarded: CPU parity (HF PyTorch, QEff PyTorch, ONNX Runtime) passes, the card output matches the CPU reference, the repo tests pass on AI 100, and the benchmark matrix has been run. One Ultra card, MXFP6 weights + MXINT8 KV cache (fp16 weights for the 0.9B), 128-token prompt, 256 generated tokens:
+0.9B, 3.7B and 7B are onboarded: CPU parity (HF PyTorch, QEff PyTorch, ONNX Runtime) passes, the card output matches the CPU reference, the repo tests pass on AI 100, and the benchmark matrix has been run. The 32B uses the same wrapper and config features as the 7B (no QK norm, no attention gate, 4 norm groups, same vocabulary and remote code file) and is next in line; its rows fill in once Steps 0 to 4 have run for it. One Ultra card, MXFP6 weights + MXINT8 KV cache (fp16 weights for the 0.9B), 128-token prompt, 256 generated tokens:
 
 | Model | 1 device | 4 devices, single user | 4 devices, 16 users (aggregate / per user) | tok/s per W at 16 users |
 |---|---|---|---|---|
+| `IFM/K2-Horizon-32B` | does not fit | pending | pending | pending |
 | `IFM/K2-Horizon-7B` | 14.1 tok/s | 48.6 tok/s, TTFT 0.06 s | 452 / 28 tok/s | 3.2 |
 | `IFM/K2-Horizon-3.7B` | 23.4 tok/s | 65.9 tok/s, TTFT 0.04 s | 385 / 24 tok/s | 2.9 |
 | `IFM/K2-Horizon-0.9B` | 45.8 tok/s | 134.9 tok/s, TTFT 0.03 s | 1070 / 67 tok/s | 9.1 |
@@ -19,19 +20,20 @@ The repo tests on AI 100 pass for the dummy, continuous-batching and per-PR fp16
 | `IFM/K2-Horizon-0.9B` | 28 | 1536 | 2.2 GB | not used | fp16 + MXINT8 KV | MXFP6 degrades the output (the first four layers are the sensitive ones), so run it without `--mxfp6` |
 | `IFM/K2-Horizon-3.7B` | 36 | 2560 | 10 GB | 4 GB | MXFP6 + MXINT8 KV | same architecture as the 7B, the 250k vocabulary is most of the weight |
 | `IFM/K2-Horizon-7B` | 36 | 4096 | 18 GB | 7 GB | MXFP6 + MXINT8 KV | |
+| `IFM/K2-Horizon-32B` | 64 | 5120 | 70 GB | 27 GB | MXFP6 + MXINT8 KV | 64 heads / 8 KV heads; needs all 4 devices (fp16 or MXFP6), the fp32 export needs about 140 GB of host RAM |
 
-The wrapper covers the dense sizes; 0.9B, 3.7B and 7B are validated, the 32B has the same architecture but has not been run. The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
+The wrapper covers the dense sizes. The 36B and 375B MoVA sizes have routed value experts and a sparse MoE that are not mapped here.
 
 ## Files in this folder
 
 | File | Purpose |
 |---|---|
-| `README.md` | this guide: onboarding, validation and benchmark steps for the three sizes |
+| `README.md` | this guide: onboarding, validation and benchmark steps for the four sizes |
 | `SERVER_SETUP.md` | first-time setup on the shared server: csh, home quota, caches on the local disk |
 | `k2_horizon_inference.py` | compile and run one model on the card, prints the output and `perf_metrics` (Steps 1 and 3) |
 | `run_benchmark.py` | the benchmark: runs every case for every model, writes CSVs and `REPORT.md` (Step 4) |
 | `benchmark.py` | single-matrix engine used by `run_benchmark.py`; can be run on its own |
-| `benchmark_matrix.json`, `benchmark_matrix_0_9b.json` | default cases, 128-token prompt (MXFP6 for 7B and 3.7B, fp16 for the 0.9B) |
+| `benchmark_matrix.json`, `benchmark_matrix_0_9b.json`, `benchmark_matrix_32b.json` | default cases, 128-token prompt (MXFP6 for 7B and 3.7B, fp16 for the 0.9B, 4-device cases only for the 32B) |
 | `benchmark_matrix_serving.json`, `benchmark_matrix_serving_0_9b.json` | 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B) |
 | `tools/causal_lm_parity.py` | CPU parity check, HF PyTorch vs QEff PyTorch vs ONNX Runtime (Step 0) |
 | `tools/k2_tiny_check.py` | the same three stages on a tiny random K2 config, seconds to run, for wrapper changes |
@@ -46,9 +48,10 @@ First time on a shared server (csh, home quota, local disk)? Do [SERVER_SETUP.md
 - A server with Cloud AI 100 Ultra cards, Platform SDK and Apps SDK installed (`/opt/qti-aic` exists). Check the cards with `/opt/qti-aic/tools/qaic-util -q`.
 - Python 3.10 to 3.12. The repo pins `transformers==5.5.4`.
 - Internet access to Hugging Face. The models are public, no token needed.
-- Disk on the local drive, not the NFS home: 7B needs about 60 GB (bf16 checkpoint, fp32 ONNX, QPCs), 3.7B about 35 GB, 0.9B about 8 GB.
+- Disk on the local drive, not the NFS home: 7B needs about 60 GB (bf16 checkpoint, fp32 ONNX, QPCs), 3.7B about 35 GB, 0.9B about 8 GB, 32B about 250 GB.
+- Host RAM for the fp32 export: about 36 GB for the 7B, about 140 GB for the 32B (`free -g` to check).
 
-One AI 100 Ultra card is 4 devices of 32 GB. Every size fits on one device; use 4 devices for throughput.
+One AI 100 Ultra card is 4 devices of 32 GB. The 0.9B, 3.7B and 7B fit on one device; use 4 devices for throughput. The 32B needs all 4 devices.
 
 ## Install
 
@@ -84,10 +87,11 @@ cd examples/text_generation/k2_horizon
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-0.9B --trust-remote-code --prompt-len 8 --ctx-len 32
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-3.7B --trust-remote-code --prompt-len 8 --ctx-len 32
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code --prompt-len 8 --ctx-len 32
+python3 tools/causal_lm_parity.py IFM/K2-Horizon-32B --trust-remote-code --prompt-len 8 --ctx-len 32 --num-hidden-layers 8
 cd ../../..
 ```
 
-The ONNX leg runs in fp32 and needs about 36 GB of host RAM for the 7B. On a smaller host use `--num-hidden-layers 8` (first 8 layers with real weights, enough to catch a wrapper bug) or check the PyTorch legs on the full model with `--dtype bfloat16 --skip-export`. Expected: `RESULT {... "match": true ...}` for every stage.
+The ONNX leg runs in fp32 and needs about 36 GB of host RAM for the 7B and about 140 GB for the 32B. On a smaller host use `--num-hidden-layers 8` (first 8 layers with real weights, enough to catch a wrapper bug; the 32B command above does this) or check the PyTorch legs on the full model with `--dtype bfloat16 --skip-export`. Expected: `RESULT {... "match": true ...}` for every stage.
 
 ## Step 1: compile and run on the card
 
@@ -102,9 +106,13 @@ python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name
 
 python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
     --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --num-cores 16 --device-group '[0]'
+
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-32B \
+    --prompt "The capital of France is" --prefill-seq-len 128 --ctx-len 4096 --num-cores 16 --device-group '[0,1,2,3]' \
+    --use-onnx-subfunctions
 ```
 
-The same thing through the CLI (replace the model name as needed):
+The 32B is 70 GB in fp16, so it runs on all four devices from the start; the other sizes fit on one. The same thing through the CLI (replace the model name as needed):
 
 ```csh
 python3 -m QEfficient.cloud.infer --model_name IFM/K2-Horizon-7B --trust_remote_code \
@@ -112,7 +120,7 @@ python3 -m QEfficient.cloud.infer --model_name IFM/K2-Horizon-7B --trust_remote_
     --prompt "The capital of France is" --mos 1 --aic_enable_depth_first
 ```
 
-Expected output for this prompt, greedy, from the 7B: ` Paris. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The`. The 3.7B and 0.9B also answer ` Paris` and continue sensibly; compare them with Step 2.
+Expected output for this prompt, greedy, from the 7B: ` Paris. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The`. The 3.7B and 0.9B also answer ` Paris` and continue sensibly; compare them with Step 2. For the 32B, record the output and compare it with the Hugging Face run in Step 2.
 
 The first run exports the ONNX (a few minutes) and compiles the QPC (longer). Both are cached under `QEFF_HOME`, so later runs with the same settings skip straight to generation. Add `--use-onnx-subfunctions` to cut export and compile time.
 
@@ -127,7 +135,7 @@ pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "K
 pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "k2_horizon_text" -v
 ```
 
-- `K2-Horizon-7B and dummy`: the 7B configuration (head_dim 128, gate and QK norm). The 3.7B has the same architecture, so this test covers it too.
+- `K2-Horizon-7B and dummy`: the 7B configuration (head_dim 128, gate and QK norm). The 3.7B and 32B have the same architecture and config features, so this test covers them too.
 - `K2-Horizon-0.9B and dummy`: the 0.9B configuration (head_dim 64, YaRN rope).
 - `k2_horizon_text`: the per-PR lanes on the 7B: continuous batching, ONNX subfunctions, CCL, fp16 and fp32 export. The speculative-decoding case is an expected xfail; the bf16 lane fails on an AI 100-only host for every model.
 
@@ -144,7 +152,7 @@ For the real weights, compare the card output of Step 1 with a greedy Hugging Fa
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "IFM/K2-Horizon-7B"  # or IFM/K2-Horizon-3.7B, IFM/K2-Horizon-0.9B
+model_name = "IFM/K2-Horizon-7B"  # or IFM/K2-Horizon-3.7B, IFM/K2-Horizon-0.9B, IFM/K2-Horizon-32B (needs about 70 GB of host RAM)
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, dtype=torch.bfloat16)
 inputs = tokenizer("The capital of France is", return_tensors="pt")
@@ -156,9 +164,13 @@ Compare the first 20 or so tokens. fp16 on the card and bf16 on CPU can drift on
 
 ## Step 3: performance precision
 
-Switch on the production precision and read the metrics that `generate()` prints. The 7B and 3.7B take MXFP6 weights; the 0.9B keeps fp16 weights:
+Switch on the production precision and read the metrics that `generate()` prints. The 32B, 7B and 3.7B take MXFP6 weights; the 0.9B keeps fp16 weights:
 
 ```csh
+python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-32B \
+    --prefill-seq-len 128 --ctx-len 4096 --generation-len 256 --num-cores 16 --device-group '[0,1,2,3]' \
+    --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions
+
 python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name IFM/K2-Horizon-7B \
     --prefill-seq-len 128 --ctx-len 4096 --generation-len 256 --num-cores 16 --device-group '[0,1,2,3]' \
     --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions
@@ -182,13 +194,14 @@ Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV ca
 
 ```csh
 python3 examples/text_generation/k2_horizon/run_benchmark.py --dry-run             # checks and plan, nothing compiled
-python3 examples/text_generation/k2_horizon/run_benchmark.py                       # 128-token prompts, 1 to 16 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py                       # all four sizes, 128-token prompts, 1 to 16 users
 python3 examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # 1024-token prompts, long outputs, 1 to 32 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-32B   # one size only
 ```
 
 Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_serving]/REPORT.md`, with the CSVs and `meta.json` (SDK version, QEfficient commit, settings) next to it. `--models`, `--only`, `--repeats`, `--card-price-usd` (fills tok/s per dollar) and `--report-only` narrow or rerun; `--help` lists them.
 
-The cases come from `benchmark_matrix*.json` (one file per workload, a separate one for the 0.9B because it runs fp16 instead of MXFP6). Each case is one compile: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching).
+The cases come from `benchmark_matrix*.json` (one file per workload, a separate one for the 0.9B because it runs fp16 instead of MXFP6, and one for the 32B with 4-device cases only). Each case is one compile: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching). The 32B compiles take much longer than the 7B ones; run it first or on its own.
 
 The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all streams), `decode_tok_s_per_stream` (what one user sees), `itl_ms` (`1000 / per-stream tok/s`, a mean), `decode_board_w` (peak board power from `qaic-util -q`, 150 W TDP), `tok_s_per_w` (Performance per Watt), `tok_s_per_dollar` (needs `--card-price-usd`; agree the price with the customer). Nothing else may run on the card during a benchmark.
 
@@ -196,7 +209,8 @@ The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all
 
 - `Do you wish to run the custom code? [y/N]`: `trust_remote_code` was not passed.
 - The rotary tables are capped at 65536 positions (`K2_HORIZON_MAX_POSITION_EMBEDDINGS`), so keep `ctx_len` within that.
-- Out of memory during export: the export runs in fp32 and needs about 36 GB of host RAM for the 7B.
+- Out of memory during export: the export runs in fp32 and needs about 36 GB of host RAM for the 7B, about 140 GB for the 32B.
+- 32B on one device fails to compile: 70 GB fp16 / 27 GB MXFP6 plus the KV cache do not fit 32 GB; use `--device-group '[0,1,2,3]'`.
 - Compile takes long: add `--use-onnx-subfunctions`, and keep `ctx_len` to what the benchmark needs.
 - `[ERROR] cache_position is part of K2HorizonModel.forward's signature, but not documented`: printed by transformers when it loads the remote code. Harmless.
 

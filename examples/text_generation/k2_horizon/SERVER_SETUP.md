@@ -28,7 +28,7 @@ The home directory is an NFS mount with a per-user quota. `df -h ~` shows the fr
 OSError: [Errno 122] Disk quota exceeded
 ```
 
-The run needs about 60 GB for the 7B (18 GB weights, 36 GB fp32 ONNX, a few GB of QPC), so point all three caches at the local disk. Find it with `df -h` and look for a `/dev/mapper/...` or `/dev/nvme...` filesystem with space. On these servers it is `/local/mnt`, and the writable folder on it is `/local/mnt/workspace` (`drwxrwxrwt`, like `/tmp`); `/local/mnt` itself is root-owned, so `mkdir /local/mnt/<user>` is denied.
+The run needs about 60 GB for the 7B (18 GB weights, 36 GB fp32 ONNX, a few GB of QPC) and about 250 GB for the 32B, so point all three caches at the local disk. Find it with `df -h` and look for a `/dev/mapper/...` or `/dev/nvme...` filesystem with space. On these servers it is `/local/mnt`, and the writable folder on it is `/local/mnt/workspace` (`drwxrwxrwt`, like `/tmp`); `/local/mnt` itself is root-owned, so `mkdir /local/mnt/<user>` is denied.
 
 ```csh
 set user = `whoami`

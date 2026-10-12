@@ -34,7 +34,8 @@ The wrapper covers the dense sizes. The 36B and 375B MoVA sizes have routed valu
 | `run_benchmark.py` | the benchmark: runs every case for every model, writes CSVs and `REPORT.md` (Step 4) |
 | `benchmark.py` | single-matrix engine used by `run_benchmark.py`; can be run on its own |
 | `benchmark_matrix.json`, `benchmark_matrix_0_9b.json`, `benchmark_matrix_32b.json` | default cases, 128-token prompt (MXFP6 for 7B and 3.7B, fp16 for the 0.9B, 4-device cases only for the 32B) |
-| `benchmark_matrix_serving.json`, `benchmark_matrix_serving_0_9b.json` | 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B) |
+| `benchmark_matrix_client.json`, `benchmark_matrix_client_0_9b.json` | the cases to share with the customer: 1k/1k at 1, 16 and 32 users and a 10k-token prompt (0.9B: 1k/128 at 1 and 128 users, 1k/1k at 16) |
+| `benchmark_matrix_serving.json`, `benchmark_matrix_serving_0_9b.json` | the full customer sheet: 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B) |
 | `tools/causal_lm_parity.py` | CPU parity check, HF PyTorch vs QEff PyTorch vs ONNX Runtime (Step 0) |
 | `tools/k2_tiny_check.py` | the same three stages on a tiny random K2 config, seconds to run, for wrapper changes |
 | `tools/mxfp6_probe.py` | simulates MXFP6 weights on CPU per layer or weight group to find what degrades a model |
@@ -193,15 +194,18 @@ Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV ca
 `run_benchmark.py` runs every case for every model (compile, warm-up, timed runs with board power sampled) and writes one CSV per model plus `REPORT.md`:
 
 ```csh
-python3 examples/text_generation/k2_horizon/run_benchmark.py --dry-run             # checks and plan, nothing compiled
-python3 examples/text_generation/k2_horizon/run_benchmark.py                       # all four sizes, 128-token prompts, 1 to 16 users
-python3 examples/text_generation/k2_horizon/run_benchmark.py --workload serving    # 1024-token prompts, long outputs, 1 to 32 users
-python3 examples/text_generation/k2_horizon/run_benchmark.py --models IFM/K2-Horizon-32B   # one size only
+python3 examples/text_generation/k2_horizon/run_benchmark.py --dry-run                       # checks and plan, nothing compiled
+python3 examples/text_generation/k2_horizon/run_benchmark.py --workload client --repeats 1   # the cases to share with the customer
+python3 examples/text_generation/k2_horizon/run_benchmark.py                                 # 128-token prompts, 1 to 16 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py --workload serving              # 1024-token prompts, long outputs, 1 to 32 users
+python3 examples/text_generation/k2_horizon/run_benchmark.py --workload client --models IFM/K2-Horizon-32B   # one size only
 ```
 
-Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_serving]/REPORT.md`, with the CSVs and `meta.json` (SDK version, QEfficient commit, settings) next to it. `--models`, `--only`, `--repeats`, `--card-price-usd` (fills tok/s per dollar) and `--report-only` narrow or rerun; `--help` lists them.
+Start with `client`: four cases per model on the production precision and all 4 devices, matching the customer's reference sheet (1024-in / 1024-out at 1, 16 and 32 users, plus a 10240-token prompt for TTFT; for the 0.9B 1024-in / 128-out at 1 and 128 users, plus 16 users at 1k/1k). Every case is a separate compile, 20 to 40 minutes each for the 7B and longer for the 32B, so the full `default` and `serving` sets take a day or more; `client` is about 2 hours per model (more for the 32B). Compiles are cached under `QEFF_HOME`, so a rerun with the same settings only regenerates.
 
-The cases come from `benchmark_matrix*.json` (one file per workload, a separate one for the 0.9B because it runs fp16 instead of MXFP6, and one for the 32B with 4-device cases only). Each case is one compile: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching). The 32B compiles take much longer than the 7B ones; run it first or on its own.
+Results: `/local/mnt/workspace/$USER/k2_horizon_benchmark[_client|_serving]/REPORT.md`, with the CSVs and `meta.json` (SDK version, QEfficient commit, settings) next to it. `--models`, `--only`, `--repeats`, `--card-price-usd` (fills tok/s per dollar) and `--report-only` narrow or rerun; `--help` lists them.
+
+The cases come from `benchmark_matrix*.json` (one file per workload, a separate one for the 0.9B because it runs fp16 instead of MXFP6, and one for the 32B with 4-device cases only). Each case is one compile: `devices`, `mxfp6`, `mxint8_kv_cache`, `prefill_seq_len`, `ctx_len`, `input_len`, `generation_len`, `batch_size` (more than 1 = continuous batching).
 
 The report columns: `ttft_s` (time to first token), `decode_tok_s` (sum over all streams), `decode_tok_s_per_stream` (what one user sees), `itl_ms` (`1000 / per-stream tok/s`, a mean), `decode_board_w` (peak board power from `qaic-util -q`, 150 W TDP), `tok_s_per_w` (Performance per Watt), `tok_s_per_dollar` (needs `--card-price-usd`; agree the price with the customer). Nothing else may run on the card during a benchmark.
 

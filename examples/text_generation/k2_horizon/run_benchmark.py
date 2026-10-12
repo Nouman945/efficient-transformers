@@ -14,6 +14,7 @@ Markdown report with every table.
 
     python3 run_benchmark.py                                   # 32B, 7B, 3.7B, 0.9B, default matrices
     python3 run_benchmark.py --models IFM/K2-Horizon-7B --only mx_4dev_ctx4k --repeats 5
+    python3 run_benchmark.py --workload client --repeats 1     # the four cases to share with the customer, per model
     python3 run_benchmark.py --workload serving                # 1024-token prompts, long outputs, up to 32 users
     python3 run_benchmark.py --dry-run                         # checks and plan only, no compile
     python3 run_benchmark.py --report-only                     # rebuild REPORT.md from the CSVs
@@ -42,6 +43,7 @@ DEFAULT_MODELS = ["IFM/K2-Horizon-32B", "IFM/K2-Horizon-7B", "IFM/K2-Horizon-3.7
 # the 0.9B degrades with MXFP6 weights, its matrices use fp16 + MXINT8 instead
 # the 32B (~70 GB bf16) does not fit one device, its default matrix has 4-device cases only
 # "serving": 1024-token prompts, long outputs, 1 to 32 users (128 for the 0.9B), the shapes in the customer's reference sheet
+# "client": the four serving cases worth sharing (1, 16 and 32 users at 1k/1k, plus the 10k-prompt TTFT), 4 compiles per model
 WORKLOADS = {
     "default": {
         "IFM/K2-Horizon-0.9B": "benchmark_matrix_0_9b.json",
@@ -49,6 +51,7 @@ WORKLOADS = {
         None: "benchmark_matrix.json",
     },
     "serving": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_serving_0_9b.json", None: "benchmark_matrix_serving.json"},
+    "client": {"IFM/K2-Horizon-0.9B": "benchmark_matrix_client_0_9b.json", None: "benchmark_matrix_client.json"},
 }
 MAX_CTX_LEN = 65536  # K2_HORIZON_MAX_POSITION_EMBEDDINGS
 

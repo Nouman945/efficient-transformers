@@ -12,6 +12,7 @@ A size is onboarded when all four gates hold. Checked on one Ultra card (4 devic
 | 2. Card output == Hugging Face greedy, fp16 (Step 1) | pass | pass | pass | pass, 4 devices |
 | 3. Repo tests on the card (Step 2) | dummy pass; few and full pending | pending | dummy and per-PR pass; few and full pending | pending |
 | 4. Production precision reads right (Step 3) | fp16 + MXINT8 KV (MXFP6 degrades it) | MXFP6 + MXINT8 KV | MXFP6 + MXINT8 KV | pending |
+| Long context, needle at 32K and 64K (Step 3b) | pending | pending | pending | pending |
 
 Single user, 128-token prompt, 256 generated tokens, at the precision in gate 4 (`perf_metrics` from Step 3):
 
@@ -45,6 +46,7 @@ The wrapper covers these four dense sizes only; a config with experts is refused
 | `tools/k2_tiny_check.py` | HF PyTorch vs QEff PyTorch vs ONNX Runtime on a tiny random model per size, seconds to run, for wrapper changes |
 | `tools/causal_lm_parity.py` | the same three stages on the real weights (Step 0) |
 | `tools/mxfp6_probe.py` | simulates MXFP6 weights on CPU per layer or weight group to find what degrades a model (Step 3) |
+| `tools/qpc_vs_hf.py` | compiled QPC vs the Hugging Face model, token by token, at the shipped shapes and at long context (Step 3b) |
 
 The wrapper itself is in `QEfficient/transformers/models/k2_horizon/` (see the last section).
 
@@ -222,6 +224,33 @@ python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name
 The output must still read correctly at this precision; if it does not, go back to Step 1 settings and compare. `perf_metrics` gives prefill time (time to first token), decode tokens per second and total throughput for one user. These are the numbers in the Status table. Multi-user numbers, power and the customer's shapes are the benchmark branch's job.
 
 Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV cache (`--mxint8-kv-cache`). bf16 and FP8 are not AI 100 features, so use the bf16 Hub repo and let the compiler quantize; skip the `-FP8`, `-NVFP4` and `-GGUF` repos. If an MXFP6 run degrades a model, `tools/mxfp6_probe.py` simulates MXFP6 on CPU per weight group or layer to find the sensitive part (that is how the 0.9B result was found).
+
+## Step 3b: QPC against Hugging Face at the shipped shapes, and at long context
+
+Steps 1 to 3 compare by eye and the repo lanes compare at 32 tokens. `tools/qpc_vs_hf.py` compares a compiled QPC with the original model token by token at the shape you ship, and checks long range. Compiles are cached under `QEFF_HOME`, so a QPC that already exists from Step 1 or 3 is reused.
+
+Prompt mode, greedy on both sides, reports the first token where they differ. Pass = the first 16 tokens identical (`--min-match`; fp16 vs bf16 usually agree for 20 or more, MXFP6 for fewer, then they drift, which is normal; a different first token is not):
+
+```csh
+cd examples/text_generation/k2_horizon
+python3 tools/qpc_vs_hf.py IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0]'
+python3 tools/qpc_vs_hf.py IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0,1,2,3]' \
+    --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --min-match 8
+```
+
+Needle mode, the long-context check: a prose prompt of `--needle-tokens` tokens with a code word planted near the start and a question at the end; pass = the QPC answers with the word. This is the only step that exercises rope and the cache past a few thousand positions (the 0.9B's YaRN scaling is identity below 8192, so nothing before this touches it). Run it at 32K and at the 64K cap, on 4 devices, at the production precision; `--skip-hf` leaves out the CPU run, which would take hours at this length:
+
+```csh
+foreach size (0.9B 3.7B 7B 32B)
+    python3 tools/qpc_vs_hf.py IFM/K2-Horizon-$size --needle-tokens 30000 --prefill-seq-len 1024 --ctx-len 32768 \
+        --device-group '[0,1,2,3]' --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --skip-hf
+    python3 tools/qpc_vs_hf.py IFM/K2-Horizon-$size --needle-tokens 60000 --prefill-seq-len 1024 --ctx-len 65536 \
+        --device-group '[0,1,2,3]' --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --skip-hf
+end
+cd ../../..
+```
+
+Drop `--mxfp6` for the 0.9B. Each is one compile (the 64K one is long) plus a prefill of 60K tokens. Results go to `tools/results/qpc_vs_hf_<model>_<tag>.json`; the `pass` field and the two texts are what to keep. A fail at 64K and a pass at 32K points at the rotary tables or the cache indexing, not the weights.
 
 ## Troubleshooting
 

@@ -175,7 +175,7 @@ pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "k
 
 Expected: dummy 2 passed, 1 skipped; few 2 passed and 2 failed (`test_few_causal_lm_onnx_mdp_compile_only` asks for 2 MDP partitions without `num_devices=2`, an upstream test bug that hits every model); full 2 passed; per-PR 4 passed, 1 xfail, 1 failed. The xfail is the speculative-decoding case. The failure is the bf16 case: it compiles for AI 200 (the test picks the target from the dtype, `test_causal_lm_models.py:123`) and fails on an AI 100-only host for every model.
 
-Each lane takes its Hugging Face reference tokens from `tests/golden_outputs/goldens.json`. A lane with no entry computes the reference live and warns but never writes the file: the first run of a new lane, and any run after a change that alters the model output, needs `setenv QEFF_REGENERATE_GOLDEN 1`. `QEFF_RUN_CPU_REFERENCES 1` also runs the QEff PyTorch and ONNX Runtime legs live. If the file changed, commit it, it is part of the PR:
+Each lane takes its Hugging Face reference tokens from `tests/golden_outputs/goldens.json`. A lane with no entry computes the reference live and warns but never writes the file: the first run of a new lane, and any run after a change that alters the model output, needs `setenv QEFF_REGENERATE_GOLDEN 1`. `QEFF_RUN_CPU_REFERENCES 1` also runs the QEff PyTorch and ONNX Runtime legs live. The dummy and per-PR entries are in the PR already (made on the laptop, no weights needed); the few and full entries are optional, upstream computes them live for most models, and the server cannot push anyway, so leave them where they are. If a dummy or per-PR entry ever changes, that is the commit:
 
 ```csh
 git add tests/golden_outputs/goldens.json

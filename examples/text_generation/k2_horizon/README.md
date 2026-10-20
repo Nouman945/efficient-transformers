@@ -8,22 +8,22 @@ A size is onboarded when all four gates hold. Checked on one Ultra card (4 devic
 
 | Gate | 0.9B | 3.7B | 7B | 32B |
 |---|---|---|---|---|
-| 1. CPU parity, HF PyTorch == QEff PyTorch == ONNX Runtime (Step 0) | pass, full model | pass, full model | pass, full model | pass, reduced config; real-weight run pending |
-| 2. Card output == Hugging Face greedy, fp16 (Step 1) | pass | pass | pass | pass, 4 devices |
-| 3. Repo tests on the card (Step 2) | dummy pass; few and full pending | pending | dummy and per-PR pass; few and full pending | pending |
-| 4. Production precision reads right (Step 3) | fp16 + MXINT8 KV (MXFP6 degrades it) | MXFP6 + MXINT8 KV | MXFP6 + MXINT8 KV | pending |
-| Long context, needle at 32K and 64K (Step 3b) | pending | pending | pending | pending |
+| 1. CPU parity, HF PyTorch == QEff PyTorch == ONNX Runtime (Step 0) | pass, full model | pass, full model | pass, full model | pass, reduced config and first layer; full model pending |
+| 2. Card output == Hugging Face greedy, fp16 (Steps 1, 3b) | pass, 57/64 tokens | pass, 64/64 | pass, 64/64 | pass, 64/64, 4 devices |
+| 3. Repo tests on the card (Step 2) | dummy pass; few pass; full: one token flips after 5 (under review) | dummy: one near-tie token flips (under review); few: 2 token mismatches (under review); full pass | dummy, few, full, per-PR pass | dummy, few, full pass |
+| 4. Production precision reads right (Steps 3, 3b) | fp16 + MXINT8 KV, 57/64 (MXFP6 degrades it) | MXFP6 + MXINT8 KV, 64/64 | MXFP6 + MXINT8 KV, 49/64 | MXFP6 + MXINT8 KV: text right, forks from HF at token 1 on a near-tie; top-5 check pending |
+| Long context, needle at 32K and 64K (Step 3b) | pending | pass, pass | pass, pass | pass; 64K compile hung |
 
 Single user, 128-token prompt, 256 generated tokens, at the precision in gate 4 (`perf_metrics` from Step 3):
 
 | Model | 1 device | 4 devices |
 |---|---|---|
-| `IFM/K2-Horizon-32B` | does not fit | 5.6 tok/s, TTFT 0.7 s (fp16; MXFP6 pending) |
+| `IFM/K2-Horizon-32B` | does not fit | 11.7 tok/s MXFP6 (5.6 tok/s, TTFT 0.7 s in fp16) |
 | `IFM/K2-Horizon-7B` | 14.1 tok/s | 48.6 tok/s, TTFT 0.06 s |
-| `IFM/K2-Horizon-3.7B` | 23.4 tok/s | 65.9 tok/s, TTFT 0.04 s |
-| `IFM/K2-Horizon-0.9B` | 45.8 tok/s | 134.9 tok/s, TTFT 0.03 s |
+| `IFM/K2-Horizon-3.7B` | 23.4 tok/s | 66.4 tok/s, TTFT 0.04 s |
+| `IFM/K2-Horizon-0.9B` | 45.8 tok/s | 131.5 tok/s, TTFT 0.03 s |
 
-The per-PR lanes pass for fp16 and fp32; the bf16 lane targets AI 200 and cannot compile on an AI 100-only host.
+The per-PR lanes pass for fp16 and fp32; the bf16 lane targets AI 200 and cannot compile on an AI 100-only host. In the few lane the two MDP tests fail for every model (upstream test bug, see Step 2). The three single-token flips in gate 3 are fp32-CPU vs fp16-card exact-match tests on near-tie logits; the shipped-shape runs in gates 2 and 4 passed for those sizes, and the flips are being looked at before they are called accepted.
 
 | Model | Params (Hub) | Layers | Hidden | Heads / KV | Norm groups | Weights fp16 | Weights MXFP6 | KV per token (MXINT8) | Notes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -43,10 +43,9 @@ The wrapper covers these four dense sizes only; a config with experts is refused
 | `README.md` | this guide: onboarding and validation steps for the four sizes |
 | `SERVER_SETUP.md` | first-time setup on the shared server: csh, home quota, caches on the local disk |
 | `k2_horizon_inference.py` | compile and run one model on the card, prints the output and `perf_metrics` (Steps 1 and 3) |
-| `tools/k2_tiny_check.py` | HF PyTorch vs QEff PyTorch vs ONNX Runtime on a tiny random model per size, seconds to run, for wrapper changes |
 | `tools/causal_lm_parity.py` | the same three stages on the real weights (Step 0) |
 | `tools/mxfp6_probe.py` | simulates MXFP6 weights on CPU per layer or weight group to find what degrades a model (Step 3) |
-| `tools/qpc_vs_hf.py` | compiled QPC vs the Hugging Face model, token by token, at the shipped shapes and at long context (Step 3b) |
+| `scripts/debug/k2_horizon_qpc_vs_hf.py` (PR branch) | compiled QPC vs the Hugging Face model, token by token, at the shipped shapes and at long context (Step 3b) |
 
 The wrapper itself is in `QEfficient/transformers/models/k2_horizon/` (see the last section).
 
@@ -91,18 +90,18 @@ Later visits: `git fetch fork; git reset --hard fork/k2-horizon-onboarding-docs`
 
 ## Step 0: CPU parity (onboarding check, no card needed)
 
-First the tiny check: each size's real config reduced to 2 layers, random weights, HF PyTorch -> QEff PyTorch -> ONNX Runtime, token match. Seconds per size; run it after every wrapper change:
+First the quickcheck case: each size's real config reduced to 2 layers, random weights, HF PyTorch -> QEff PyTorch -> ONNX Runtime, token match. A minute per size; run it after every wrapper change:
 
 ```csh
-cd examples/text_generation/k2_horizon
-python3 tools/k2_tiny_check.py
+pytest tests/unit_test/models/test_model_quickcheck.py -k k2_horizon -v
 ```
 
-Expected: `HF==KV True HF==ORT True` for all four. A KV mismatch is the wrapper; an ORT mismatch is the export.
+Expected: 4 passed. A KV mismatch is the wrapper; an ORT mismatch is the export.
 
 Then the real weights. `tools/causal_lm_parity.py` runs the same three stages on the checkpoint and writes `tools/results/<model>.json`:
 
 ```csh
+cd examples/text_generation/k2_horizon
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-0.9B --trust-remote-code --prompt-len 8 --ctx-len 32
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-3.7B --trust-remote-code --prompt-len 8 --ctx-len 32
 python3 tools/causal_lm_parity.py IFM/K2-Horizon-7B --trust-remote-code --prompt-len 8 --ctx-len 32
@@ -174,9 +173,9 @@ The per-PR lanes (continuous batching, ONNX subfunctions, CCL, fp16 and fp32 exp
 pytest tests/transformers/models/causal_lm_models/test_causal_lm_models.py -k "k2_horizon_text" -v
 ```
 
-Expected: dummy 2 passed, 1 skipped; few 4 passed; full 2 passed; per-PR 4 passed, 1 xfail, 1 failed. The xfail is the speculative-decoding case. The failure is the bf16 case: it compiles for AI 200 (the test picks the target from the dtype, `test_causal_lm_models.py:123`) and fails on an AI 100-only host for every model.
+Expected: dummy 2 passed, 1 skipped; few 2 passed and 2 failed (`test_few_causal_lm_onnx_mdp_compile_only` asks for 2 MDP partitions without `num_devices=2`, an upstream test bug that hits every model); full 2 passed; per-PR 4 passed, 1 xfail, 1 failed. The xfail is the speculative-decoding case. The failure is the bf16 case: it compiles for AI 200 (the test picks the target from the dtype, `test_causal_lm_models.py:123`) and fails on an AI 100-only host for every model.
 
-Each lane takes its Hugging Face reference tokens from `tests/golden_outputs/goldens.json`; a missing entry is computed on the CPU and written on first use. Set `QEFF_REGENERATE_GOLDEN 1` only after a change that alters the model output. `QEFF_RUN_CPU_REFERENCES 1` also runs the QEff PyTorch and ONNX Runtime legs live instead of trusting the golden. If the file changed, commit it, it is part of the PR:
+Each lane takes its Hugging Face reference tokens from `tests/golden_outputs/goldens.json`. A lane with no entry computes the reference live and warns but never writes the file: the first run of a new lane, and any run after a change that alters the model output, needs `setenv QEFF_REGENERATE_GOLDEN 1`. `QEFF_RUN_CPU_REFERENCES 1` also runs the QEff PyTorch and ONNX Runtime legs live. If the file changed, commit it, it is part of the PR:
 
 ```csh
 git add tests/golden_outputs/goldens.json
@@ -227,30 +226,28 @@ Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV ca
 
 ## Step 3b: QPC against Hugging Face at the shipped shapes, and at long context
 
-Steps 1 to 3 compare by eye and the repo lanes compare at 32 tokens. `tools/qpc_vs_hf.py` compares a compiled QPC with the original model token by token at the shape you ship, and checks long range. Compiles are cached under `QEFF_HOME`, so a QPC that already exists from Step 1 or 3 is reused.
+Steps 1 to 3 compare by eye and the repo lanes compare at 32 tokens. `scripts/debug/k2_horizon_qpc_vs_hf.py` compares a compiled QPC with the original model token by token at the shape you ship, and checks long range. Compiles are cached under `QEFF_HOME`, so a QPC that already exists from Step 1 or 3 is reused.
 
-Prompt mode, greedy on both sides, reports the first token where they differ. Pass = the first 16 tokens identical (`--min-match`; fp16 vs bf16 usually agree for 20 or more, MXFP6 for fewer, then they drift, which is normal; a different first token is not):
+Prompt mode, greedy on both sides, reports the first token where they differ. In fp16, pass = the first 16 tokens identical (`--min-match`; fp16 vs bf16 usually agree for 20 or more, then drift, which is normal; a different first token is not). At MXFP6 pass `--hf-topk 5` instead: the QPC's own tokens are fed back to HF and each must be in HF's top-5 at its position, because a quantized run can fork on a near-tie at the first token (the 32B picks `Paris.` where HF picks `Paris,`) and still be right:
 
 ```csh
-cd examples/text_generation/k2_horizon
-python3 tools/qpc_vs_hf.py IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0]'
-python3 tools/qpc_vs_hf.py IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0,1,2,3]' \
-    --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --min-match 8
+python3 scripts/debug/k2_horizon_qpc_vs_hf.py --model-name IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0]'
+python3 scripts/debug/k2_horizon_qpc_vs_hf.py --model-name IFM/K2-Horizon-7B --prefill-seq-len 128 --ctx-len 4096 --device-group '[0,1,2,3]' \
+    --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --hf-topk 5
 ```
 
 Needle mode, the long-context check: a prose prompt of `--needle-tokens` tokens with a code word planted near the start and a question at the end; pass = the QPC answers with the word. This is the only step that exercises rope and the cache past a few thousand positions (the 0.9B's YaRN scaling is identity below 8192, so nothing before this touches it). Run it at 32K and at the 64K cap, on 4 devices, at the production precision; `--skip-hf` leaves out the CPU run, which would take hours at this length:
 
 ```csh
 foreach size (0.9B 3.7B 7B 32B)
-    python3 tools/qpc_vs_hf.py IFM/K2-Horizon-$size --needle-tokens 30000 --prefill-seq-len 1024 --ctx-len 32768 \
+    python3 scripts/debug/k2_horizon_qpc_vs_hf.py --model-name IFM/K2-Horizon-$size --needle-tokens 30000 --prefill-seq-len 1024 --ctx-len 32768 \
         --device-group '[0,1,2,3]' --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --skip-hf
-    python3 tools/qpc_vs_hf.py IFM/K2-Horizon-$size --needle-tokens 60000 --prefill-seq-len 1024 --ctx-len 65536 \
+    python3 scripts/debug/k2_horizon_qpc_vs_hf.py --model-name IFM/K2-Horizon-$size --needle-tokens 60000 --prefill-seq-len 1024 --ctx-len 65536 \
         --device-group '[0,1,2,3]' --mxfp6 --mxint8-kv-cache --use-onnx-subfunctions --skip-hf
 end
-cd ../../..
 ```
 
-Drop `--mxfp6` for the 0.9B. Each is one compile (the 64K one is long) plus a prefill of 60K tokens. Results go to `tools/results/qpc_vs_hf_<model>_<tag>.json`; the `pass` field and the two texts are what to keep. A fail at 64K and a pass at 32K points at the rotary tables or the cache indexing, not the weights.
+Drop `--mxfp6` for the 0.9B. Each is one compile (the 64K one is long) plus a prefill of 60K tokens. Results go to `scripts/debug/results/qpc_vs_hf_<model>_<tag>.json`; the `pass` field and the two texts are what to keep. A fail at 64K and a pass at 32K points at the rotary tables or the cache indexing, not the weights. The 32B at 64K with `--prefill-seq-len 1024` hung the compiler (one core, no log output for 40 hours, while its 32K case compiled in 15 minutes); kill such a run, retry once with `--prefill-seq-len 256`, and if it hangs again record the 32B's validated context as 32K.
 
 ## Troubleshooting
 

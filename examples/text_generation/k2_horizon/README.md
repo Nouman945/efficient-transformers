@@ -1,6 +1,6 @@
 # K2 Horizon on Cloud AI 100 Ultra
 
-How to onboard and validate the dense K2 Horizon models (`IFM/K2-Horizon-0.9B`, `IFM/K2-Horizon-3.7B`, `IFM/K2-Horizon-7B`, `IFM/K2-Horizon-32B`) on a server with Cloud AI 100 Ultra cards. Every step is run on the server; the commands are given for all four sizes. Benchmarking is a separate job and lives on branch `k2-horizon-benchmark` (folder `benchmark/`), stacked on this one.
+How to onboard and validate the dense K2 Horizon models (`IFM/K2-Horizon-0.9B`, `IFM/K2-Horizon-3.7B`, `IFM/K2-Horizon-7B`, `IFM/K2-Horizon-32B`) on a server with Cloud AI 100 Ultra cards. Every step is run on the server; the commands are given for all four sizes. Benchmarking is a separate job and lives in its own repo, [Nouman945/qaic-llm-benchmark](https://github.com/Nouman945/qaic-llm-benchmark), not in QEfficient.
 
 ## Status
 
@@ -220,7 +220,7 @@ python3 examples/text_generation/k2_horizon/k2_horizon_inference.py --model-name
     --mxint8-kv-cache --use-onnx-subfunctions
 ```
 
-The output must still read correctly at this precision; if it does not, go back to Step 1 settings and compare. `perf_metrics` gives prefill time (time to first token), decode tokens per second and total throughput for one user. These are the numbers in the Status table. Multi-user numbers, power and the customer's shapes are the benchmark branch's job.
+The output must still read correctly at this precision; if it does not, go back to Step 1 settings and compare. `perf_metrics` gives prefill time (time to first token), decode tokens per second and total throughput for one user. These are the numbers in the Status table. Multi-user numbers, power, cost per token and the customer's shapes are the job of [qaic-llm-benchmark](https://github.com/Nouman945/qaic-llm-benchmark).
 
 Precision on AI 100 Ultra: fp16 compute, MXFP6 weights (`--mxfp6`), MXINT8 KV cache (`--mxint8-kv-cache`). bf16 and FP8 are not AI 100 features, so use the bf16 Hub repo and let the compiler quantize; skip the `-FP8`, `-NVFP4` and `-GGUF` repos. If an MXFP6 run degrades a model, `tools/mxfp6_probe.py` simulates MXFP6 on CPU per weight group or layer to find the sensitive part (that is how the 0.9B result was found).
 

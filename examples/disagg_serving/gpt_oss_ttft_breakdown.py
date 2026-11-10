@@ -24,6 +24,8 @@ usage (from the efficient-transformers checkout, on a host with the cards):
 
 import argparse
 import json
+import os
+from collections import deque
 from statistics import median
 from time import perf_counter
 
@@ -108,19 +110,35 @@ def wire(session, exec_idx, buff_map, buffers, slot):
     return 1e3 * (perf_counter() - start)
 
 
-def run_prefill(prefill, prompt, slot, handoff_buffers, seq_len):
-    """Chunked prefill of one prompt. Returns (first_token, next_pos, timings in ms)."""
+def rss_mb():
+    """Resident memory of this process in MiB."""
+    with open("/proc/self/statm") as f:
+        return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20
+
+
+def run_prefill(prefill, prompt, slot, handoff_buffers, seq_len, inflight_limit=1):
+    """Chunked prefill of one prompt. Returns (first_token, next_pos, timings in ms).
+
+    Up to ``inflight_limit`` chunks are queued on the cards at once. With 1, each chunk
+    finishes before the next is submitted; with the pipeline depth, chunks overlap across stages.
+    """
     input_ids, position_ids = prompt
     kv = prefill._kv_dma
     buff_map = kv.decode_rs_full_buff_map if kv.is_hybrid_kv else kv.kv_only_buff_map
-    inputs = {"batch_index": np.array([[slot]], dtype=np.int64)}
     num_chunks = input_ids.shape[1] // seq_len
-    times = {"chunk_ms": [], "prefill_wire_ms": 0.0}
+    times = {"prefill_wire_ms": 0.0}
     exec_idx = None
+    inflight = deque()
+    start = perf_counter()
     for i in range(num_chunks):
-        inputs["input_ids"] = np.ascontiguousarray(input_ids[:, i * seq_len : (i + 1) * seq_len])
-        inputs["position_ids"] = np.ascontiguousarray(position_ids[:, i * seq_len : (i + 1) * seq_len])
-        start = perf_counter()
+        # Fresh arrays per chunk: a queued chunk must not see the next chunk's inputs.
+        inputs = {
+            "batch_index": np.array([[slot]], dtype=np.int64),
+            "input_ids": np.ascontiguousarray(input_ids[:, i * seq_len : (i + 1) * seq_len]),
+            "position_ids": np.ascontiguousarray(position_ids[:, i * seq_len : (i + 1) * seq_len]),
+        }
+        if len(inflight) >= inflight_limit:
+            prefill.complete_inf(inflight.popleft()[0], is_prefill=True)
         exec_idx = kv.prefill_available_exec_objs.get()
         try:
             if i == num_chunks - 1:
@@ -134,8 +152,10 @@ def run_prefill(prefill, prompt, slot, handoff_buffers, seq_len):
         except Exception:
             kv.prefill_available_exec_objs.put(exec_idx)
             raise
-        prefill.complete_inf(exec_idx, is_prefill=True)
-        times["chunk_ms"].append(1e3 * (perf_counter() - start))
+        inflight.append((exec_idx, inputs))
+    while inflight:
+        prefill.complete_inf(inflight.popleft()[0], is_prefill=True)
+    times["prefill_ms"] = 1e3 * (perf_counter() - start)
     token = int(np.argmax(prefill.get_outputs(index=exec_idx)["logits"]))
     return token, int(position_ids.max()) + 1, times
 
@@ -188,7 +208,7 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
         if mode == "prompt_ctx":
             small = [np.zeros((1, kv.shape[1], prompt[0].shape[1], kv.shape[3]), dtype=kv.dtype) for kv in kv_caches]
             handoff = small
-        token, pos, times = run_prefill(prefill, prompt, slot, handoff, args.prefill_seq_len)
+        token, pos, times = run_prefill(prefill, prompt, slot, handoff, args.prefill_seq_len, args.prefill_inflight)
         state["active"][slot], state["token"][slot], state["pos"][slot] = True, token, pos
         state["out"][slot].append(token)
         wiring = decode_wiring(decode, mode, kv_caches, slot, small)
@@ -196,7 +216,7 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
         for _ in range(args.steps - 1):
             steps.append(decode_step(decode, state, wiring if mode == "every_step" else None))
         tag = "a" if slot == 0 else "b"
-        result[f"{tag}_prefill_ms"] = sum(times["chunk_ms"])
+        result[f"{tag}_prefill_ms"] = times["prefill_ms"]
         result[f"{tag}_prefill_wire_ms"] = times["prefill_wire_ms"]
         result[f"{tag}_decode_wire_ms"] = steps[0][0]
         result[f"{tag}_first_step_ms"] = steps[0][1]
@@ -221,10 +241,11 @@ def main(args):
     ]
 
     cols = ["a_prefill_ms", "a_prefill_wire_ms", "a_decode_wire_ms", "a_first_step_ms", "a_steady_step_ms",
-            "b_decode_wire_ms", "b_first_step_ms", "b_steady_step_ms"]  # fmt: skip
+            "b_decode_wire_ms", "b_first_step_ms", "b_steady_step_ms", "rss_mb_per_request"]  # fmt: skip
     print(f"\nctx_len={args.ctx_len} slots={args.full_batch_size} prompt={args.prompt_tokens} tokens "
           f"kv_gb_per_slot={kv_gb_per_slot:.3f}")  # fmt: skip
     print(f"layers compiled: {config.num_hidden_layers} of {full_layers}")
+    print(f"prefill chunks in flight: {args.prefill_inflight}")
     print("b_first_step_ms is also the stall request A sees when request B joins.")
     print(f"{'mode':>11}  " + "  ".join(f"{c:>18}" for c in cols) + "  same_tokens_a  same_tokens_b", flush=True)
 
@@ -233,10 +254,13 @@ def main(args):
     reference = None
     for mode in args.modes:
         row = {"mode": mode}
+        rss_before = rss_mb()
         try:
             samples = [scenario(prefill, decode, kv_caches, prompts, mode, args) for _ in range(args.repeats + 1)][1:]
             for key in samples[0]:
                 row[key] = samples[-1][key] if key.startswith("tokens") else median(s[key] for s in samples)
+            # Each scenario serves two requests; the warm-up scenario is counted too.
+            row["rss_mb_per_request"] = (rss_mb() - rss_before) / (2 * (args.repeats + 1))
         except Exception as exc:  # report the failing mode and keep going with the others
             row["error"] = f"{type(exc).__name__}: {exc}"
         rows.append(row)
@@ -250,6 +274,8 @@ def main(args):
                 same = [str(row[k] == reference[k]) for k in ("tokens_a", "tokens_b")]
             timings = "  ".join(f"{row[c]:>18.2f}" for c in cols)
             print(f"{mode:>11}  {timings}  {same[0]:>13}  {same[1]:>13}", flush=True)
+            if mode == args.modes[0]:
+                print(f"{'':>11}  first tokens a={row['tokens_a'][:6]} b={row['tokens_b'][:6]}", flush=True)
         if args.out:
             with open(args.out, "w") as f:
                 json.dump({"args": vars(args), "kv_gb_per_slot": kv_gb_per_slot, "rows": rows}, f, indent=2)
@@ -279,5 +305,11 @@ if __name__ == "__main__":
     parser.add_argument("--modes", nargs="+", default=list(MODES), choices=MODES)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--steps", type=int, default=8, help="decode steps before and after request B joins")
+    parser.add_argument(
+        "--prefill-inflight",
+        type=int,
+        default=1,
+        help="prefill chunks queued on the cards at once; at most --stages",
+    )
     parser.add_argument("--out", default="gpt_oss_ttft_breakdown.json")
     main(parser.parse_args())

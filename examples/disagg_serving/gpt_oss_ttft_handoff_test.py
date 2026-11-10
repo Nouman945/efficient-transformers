@@ -1,6 +1,6 @@
 """Where does the fixed first-token cost go in disaggregated GPT-OSS serving?
 
-Four runs: two compiled context lengths x two prompt lengths. The context length
+Six runs: two compiled context lengths x three prompt lengths (1, 2 and 3 chunks). The context length
 changes only the size of the prefill -> decode KV hand-off; the prompt length
 changes only the number of prefill chunks. Timers sit around every prefill chunk,
 the last chunk (which carries the hand-off) and the first decode steps.
@@ -122,23 +122,26 @@ def time_request(prefill, decode, kv_caches, decode_kv_map, prompt, args):
 
     n = args.full_batch_size
     decode_s = []
-    for _ in range(args.decode_steps):
+    tokens = [token]
+    for step in range(args.decode_steps):
         inputs = {name: np.full((n, 1), -1, dtype=np.int64) for name in ("input_ids", "position_ids", "batch_index")}
         inputs["input_ids"][0, 0], inputs["position_ids"][0, 0], inputs["batch_index"][0, 0] = token, pos, 0
         start = perf_counter()
-        decode.set_data_for_kv_handoff(
-            kv_caches + kv_caches,
-            [("batch_index", 0), ("ctx_start", 0)],
-            index=decode.decode_execObj_idx,
-            buff_map=decode_kv_map,
-        )
+        if step == 0 or not args.handoff_once:
+            decode.set_data_for_kv_handoff(
+                kv_caches + kv_caches,
+                [("batch_index", 0), ("ctx_start", 0)],
+                index=decode.decode_execObj_idx,
+                buff_map=decode_kv_map,
+            )
         exec_idx = decode.np_run(inputs, is_prefill=False)
         decode.complete_inf(exec_idx, is_prefill=False)
         logits = decode.get_outputs(index=exec_idx)["logits"]
         decode_s.append(perf_counter() - start)
         token = int(np.argmax(logits.reshape(n, -1, logits.shape[-1])[0, -1]))
+        tokens.append(token)
         pos += 1
-    return chunk_s, decode_s
+    return chunk_s, decode_s, tokens
 
 
 def summarise(samples):
@@ -163,7 +166,7 @@ def main(args):
         config.num_hidden_layers = args.num_hidden_layers
     qeff_model = QEFFAutoModelForCausalLM.from_pretrained(args.model_id, continuous_batching=True, config=config)
 
-    prompt_lens = [args.short_prompt, args.prefill_seq_len + args.short_prompt]
+    prompt_lens = [i * args.prefill_seq_len + args.short_prompt for i in range(3)]
     rows = []
     for ctx_len in args.ctx_lens:
         prefill, decode = compile_sessions(qeff_model, args, ctx_len)
@@ -177,6 +180,7 @@ def main(args):
             ][1:]  # first request is warm-up
             row = {"ctx_len": ctx_len, "prompt_tokens": prompt_len, "chunks": prompt[2], "kv_gb_per_request": kv_gb}
             row.update(summarise(samples))
+            row["tokens"] = samples[-1][2]
             rows.append(row)
         prefill.deactivate()
         decode.deactivate()
@@ -227,5 +231,10 @@ if __name__ == "__main__":
     parser.add_argument("--non-subfunc-npi", default=None, help="decode NPI yaml (120B)")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--decode-steps", type=int, default=8)
+    parser.add_argument(
+        "--handoff-once",
+        action="store_true",
+        help="wire the KV buffers on the first decode step only, not on every step",
+    )
     parser.add_argument("--out", default="gpt_oss_ttft_handoff.json")
     main(parser.parse_args())

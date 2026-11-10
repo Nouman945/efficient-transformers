@@ -202,7 +202,7 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
     n = args.full_batch_size
     state = {"active": [False] * n, "token": [0] * n, "pos": [0] * n, "out": [[] for _ in range(n)]}
     result = {}
-    for slot, prompt in enumerate(prompts):
+    for tag, slot, prompt in zip("ab", (args.slot_a, args.slot_b), prompts):
         small = None
         handoff = [kv[slot : slot + 1] for kv in kv_caches]
         if mode == "prompt_ctx":
@@ -215,13 +215,12 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
         steps = [decode_step(decode, state, wiring)]
         for _ in range(args.steps - 1):
             steps.append(decode_step(decode, state, wiring if mode == "every_step" else None))
-        tag = "a" if slot == 0 else "b"
         result[f"{tag}_prefill_ms"] = times["prefill_ms"]
         result[f"{tag}_prefill_wire_ms"] = times["prefill_wire_ms"]
         result[f"{tag}_decode_wire_ms"] = steps[0][0]
         result[f"{tag}_first_step_ms"] = steps[0][1]
         result[f"{tag}_steady_step_ms"] = median(wire_ms + run_ms for wire_ms, run_ms in steps[1:])
-    result["tokens_a"], result["tokens_b"] = state["out"][0], state["out"][1]
+    result["tokens_a"], result["tokens_b"] = state["out"][args.slot_a], state["out"][args.slot_b]
     return result
 
 
@@ -275,7 +274,8 @@ def main(args):
             timings = "  ".join(f"{row[c]:>18.2f}" for c in cols)
             print(f"{mode:>11}  {timings}  {same[0]:>13}  {same[1]:>13}", flush=True)
             if mode == args.modes[0]:
-                print(f"{'':>11}  first tokens a={row['tokens_a'][:6]} b={row['tokens_b'][:6]}", flush=True)
+                print(f"{'':>11}  tokens a={row['tokens_a']}", flush=True)
+                print(f"{'':>11}  tokens b={row['tokens_b']}", flush=True)
         if args.out:
             with open(args.out, "w") as f:
                 json.dump({"args": vars(args), "kv_gb_per_slot": kv_gb_per_slot, "rows": rows}, f, indent=2)
@@ -311,5 +311,7 @@ if __name__ == "__main__":
         default=1,
         help="prefill chunks queued on the cards at once; at most --stages",
     )
+    parser.add_argument("--slot-a", type=int, default=0, help="decode slot of request A")
+    parser.add_argument("--slot-b", type=int, default=1, help="decode slot of request B")
     parser.add_argument("--out", default="gpt_oss_ttft_breakdown.json")
     main(parser.parse_args())

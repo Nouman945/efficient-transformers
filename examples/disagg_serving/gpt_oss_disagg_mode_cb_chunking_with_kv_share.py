@@ -113,6 +113,8 @@ def run(
     num_hidden_layers: int = None,
     subfunc_npi: str = DEFAULT_SUBFUNC_NPI,
     non_subfunc_npi: str = DEFAULT_NON_SUBFUNC_NPI,
+    debug_full_rewire: bool = False,
+    debug_full_ctx_row: bool = False,
 ):
     """Run CB (chunked-prefill + batched decode) over ``prompts`` with the DMA KV handoff."""
     prompts = list(prompts) if prompts else list(DEFAULT_PROMPTS)
@@ -142,6 +144,8 @@ def run(
     assert kv_cache_info and kv_cache_info[0][0][0] == full_batch_size, (
         f"decode KV batch dim {kv_cache_info[0][0][0] if kv_cache_info else None} != full_batch_size {full_batch_size}"
     )
+    # Debug only: host copies of the whole KV, re-wired for all rows on every decode step.
+    kv_caches = [np.zeros(shape, dtype=dtype) for (shape, dtype) in kv_cache_info] if debug_full_rewire else None
 
     def _prepare_prompt(prompt: str):
         """Tokenise one prompt, padded to a multiple of ``prefill_seq_len``.
@@ -168,7 +172,14 @@ def run(
         """
         chunk_inputs = {"batch_index": np.array([[slot]], dtype=np.int64)}
         prompt_len = lang_inputs["input_ids"].shape[1]
-        slot_kv_view = [np.empty((1, shape[1], prompt_len, shape[3]), dtype=dtype) for (shape, dtype) in kv_cache_info]
+        if debug_full_rewire:
+            slot_kv_view = [kv[slot : slot + 1] for kv in kv_caches]
+        else:
+            num_positions = None if debug_full_ctx_row else prompt_len
+            slot_kv_view = [
+                np.empty((1, shape[1], num_positions or shape[2], shape[3]), dtype=dtype)
+                for (shape, dtype) in kv_cache_info
+            ]
         exec_idx = None
         for i in range(num_chunks):
             chunk_inputs["input_ids"] = lang_inputs["input_ids"][:, i * prefill_seq_len : (i + 1) * prefill_seq_len]
@@ -242,13 +253,21 @@ def run(
         # device as retained state, so nothing else crosses the host on this or later steps.
         if pending_handoffs:
             slot, handoff = pending_handoffs.popleft()
-            decode_session.set_data_for_kv_handoff(
-                handoff,
-                [("batch_index", slot), ("ctx_start", 0)],
-                index=decode_session.decode_execObj_idx,
-                buff_map=decode_session.decode_buff_map,
-            )
+            if not debug_full_rewire:
+                decode_session.set_data_for_kv_handoff(
+                    handoff,
+                    [("batch_index", slot), ("ctx_start", 0)],
+                    index=decode_session.decode_execObj_idx,
+                    buff_map=decode_session.decode_buff_map,
+                )
             joined[slot] = True
+        if debug_full_rewire:
+            decode_session.set_data_for_kv_handoff(
+                kv_caches + kv_caches,
+                [("batch_index", 0), ("ctx_start", 0)],
+                index=decode_session.decode_execObj_idx,
+                buff_map=decode_session.decode_buff_map + decode_session.decode_rs_kv_only_buff_map,
+            )
         decode_inputs = _build_decode_inputs()
         exec_idx = decode_session.np_run(decode_inputs, is_prefill=False)
         decode_session.complete_inf(exec_idx, is_prefill=False)
@@ -317,6 +336,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--non-subfunc-npi", default=DEFAULT_NON_SUBFUNC_NPI, help="decode (non-subfunction) NPI yaml path"
     )
+    parser.add_argument(
+        "--debug-full-rewire",
+        action="store_true",
+        help="debug: keep the one-slot-per-step join but wire all KV rows, inputs and outputs, every step",
+    )
+    parser.add_argument(
+        "--debug-full-ctx-row",
+        action="store_true",
+        help="debug: hand off the joining slot's row at full context length, not prompt length",
+    )
     args = parser.parse_args()
 
     run(
@@ -332,4 +361,6 @@ if __name__ == "__main__":
         num_hidden_layers=args.num_hidden_layers,
         subfunc_npi=args.subfunc_npi,
         non_subfunc_npi=args.non_subfunc_npi,
+        debug_full_rewire=args.debug_full_rewire,
+        debug_full_ctx_row=args.debug_full_ctx_row,
     )

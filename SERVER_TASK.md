@@ -69,6 +69,20 @@ Speed went from about 32 to about 43 tok/sec. Which version is right is not know
 One suspicion: rows that are idle for a step (inputs set to -1) may not be harmless and may
 disturb another row, for example the last one.
 
+Results of task 2026-11-10-c:
+
+- The example change at the branch head is wrong when several requests are in flight.
+  Single-prompt runs of prompts 3 and 5 give run A's text with both old and new code.
+- In `gpt_oss_ttft_breakdown.py`, `prompt_ctx` gives exactly the tokens of `every_step` in
+  every run, including with the requests in different slots. So the hand-off itself is not
+  shown to be wrong; the join timing in the example differs from upstream (one slot per
+  step, with a pending slot idle for a step).
+- On the 8-layer model, tokens depend on the slot in both modes. This may be numeric noise
+  on a cut-down model. Not seen on the 24-layer model.
+- Memory per request: about 257 MB with `every_step`, about 0.08 MB with `prompt_ctx`
+  (100-token prompt), about 6 MB at 5000 tokens.
+- Four prefill chunks in flight is 3.0x faster but gives wrong tokens. Not usable as is.
+
 Open questions the current and next tasks are meant to answer:
 
 1. Does the example-level change give the same answers as the old code when slots refill?
@@ -81,57 +95,37 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
-**Task id: 2026-11-10-c**
+**Task id: 2026-11-10-d**
 
-Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss`. No new compile should be
-needed in steps 1 and 2. If one starts, say so in the report.
+Goal: find which part of the example change produces the wrong text for prompts 3 and 5.
+The change has three parts: (1) slots join one per step, (2) only the joining slot's row is
+wired, inputs only, and rows stay on the device, (3) the row covers only the prompt's
+positions. Two debug switches were added to the example to separate them.
 
-### Step 1. Which example run is right? Run the two differing prompts alone
+Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss`. Use the example at the branch
+head. No new compile should be needed; say so if one starts.
 
-Run `examples/disagg_serving/gpt_oss_disagg_mode_cb_chunking_with_kv_share.py` with a
-single `--prompt` each time, all other arguments default. One prompt means one busy slot
-and no refill, so nothing else can disturb it.
+Run `examples/disagg_serving/gpt_oss_disagg_mode_cb_chunking_with_kv_share.py` with the
+same six prompts as before, each as its own `--prompt`, in the same order:
 
-| Run | Code | Prompt | Output file |
+| Run | Extra argument | Output file | What it isolates |
 |---|---|---|---|
-| R1 | old (`64b1b410` for the example file and `QEfficient/generation/_kv_dma_handoff.py`) | `Name three primary colors.` | `ref_old_p3.txt` |
-| R2 | old | `Define entropy in one line.` | `ref_old_p5.txt` |
-| R3 | new (branch head) | `Name three primary colors.` | `ref_new_p3.txt` |
-| R4 | new | `Define entropy in one line.` | `ref_new_p5.txt` |
+| C | `--debug-full-rewire` | `run_c.txt` | part (1) alone: upstream wiring, new join timing |
+| D | `--debug-full-ctx-row` | `run_d.txt` | parts (1) and (2), without (3) |
 
-Compare the generated text of each with the text for the same prompt in `before.txt`
-(run A) and `after.txt` (run B) from the last task. Leave the tree clean at the branch head.
+Compare the generated text of all six prompts in C and in D with `before.txt` (run A) and
+`after.txt` (run B).
 
-### Step 2. Does the slot a request sits in change its tokens?
-
-Same model, same prompt, different slot. The tokens must be the same. Run:
-
-```
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --steps 40 --modes every_step prompt_ctx --slot-a 0 --slot-b 1 --out slot01.json
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --steps 40 --modes every_step prompt_ctx --slot-a 3 --slot-b 0 --out slot30.json
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --steps 40 --modes every_step prompt_ctx --slot-a 1 --slot-b 3 --out slot13.json
-```
-
-From the three JSON files compare, for mode `every_step` and again for mode `prompt_ctx`:
-`tokens_a` across the three runs, and `tokens_b` across the three runs. For any pair that
-differs, give the index of the first differing token.
-
-### Step 3. Two timing runs (carried over, not started last time)
-
-```
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --prompt-tokens 5000 --out in1.json
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --prompt-tokens 5000 --prefill-inflight 4 --out in4.json
-```
-
-The second run may fail or hang in prefill. If it hangs for more than 5 minutes after any
-compile is done, stop it and report that.
+If you have time left, also run the six prompts in this order with **old** code
+(`64b1b410` for the example file and `QEfficient/generation/_kv_dma_handoff.py`), output
+`run_e.txt`: prompts 4, 5, 0, 1, 2, 3 (so "Why is the sky blue?" first). Then restore the
+branch head. Compare each prompt's text with run A. This checks whether upstream itself
+changes an answer when the neighbours change.
 
 ### Report for this task
 
-- Step 1: for R1 to R4, one line each: equal to run A's text, equal to run B's text, equal
-  to both, or equal to neither. Also whether R1 equals R3 and R2 equals R4.
-- Step 2: for each mode, `tokens_a` same or different across the three runs, and the same
-  for `tokens_b`, with the first differing index.
-- Step 3: for each run, the table rows for `every_step` and `prompt_ctx` (all columns,
-  including `rss_mb_per_request`), and whether `tokens_a` of `prompt_ctx` is identical
-  between `in1.json` and `in4.json`.
+- Run C: tok/sec line; for each of the six prompts: equal to A, equal to B, or neither.
+- Run D: the same.
+- Run E, if done: for each prompt, equal to A or not, with the first differing character
+  index.
+- One line: which of parts (1), (2), (3) the evidence points to.

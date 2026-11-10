@@ -92,6 +92,21 @@ Results of task 2026-11-10-d:
   itself gives different text when the neighbours change. Run A is not a fixed reference.
 - Speed comes from the wiring: about 32 tok/sec with upstream wiring, about 43 with the new.
 
+Results of task 2026-11-10-e:
+
+- Two requests can join decode on the same step with the new hand-off (two wire calls, then
+  one decode step). `new_in` and `prompt_ctx` give exactly the tokens of `every_step`.
+- Runs F and G (new code, prompts reordered) differ only on prompt 3, at the last token. The
+  top-2 margins there are 0.27 and 0.97, so the gap between the two logits moved by at least
+  1.23 with identical earlier tokens. That is not a near-tie. Decode output depends on slot
+  or schedule in upstream code too. Per-row drift or a cross-row effect: not known.
+
+Important limit of all results above: they are from the single-process Python example in
+this repository. The deployment in the bug report is a different code path: a vLLM based
+disaggregated serving container with separate prefill and decode worker processes, a
+request proxy, and a KV hand-off service between them, at decode batch size 1. None of that
+code is in this repository. It is not yet shown that anything measured here applies there.
+
 Open questions the current and next tasks are meant to answer:
 
 1. Does the example-level change give the same answers as the old code when slots refill?
@@ -104,43 +119,50 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
-**Task id: 2026-11-10-e**
+**Task id: 2026-11-11-f**
 
-Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss` and the branch head. No new
-compile should be needed; say so if one starts.
+Read-only discovery. No compile, no model run, no device use. Do not pull or download
+images or packages. Do not start a serving container. Do not copy any source code you find
+into this repository or into the report; give paths, names and short answers only.
 
-### Step 1. Can two requests join decode on the same step with the new hand-off?
+Goal: find out whether the code of the real serving stack from the bug report is on this
+machine, and if so, how the first token is produced there. Read the bug report first (ask
+the user for its path) to get the exact image name, container name, ports and flags.
 
-Upstream lets several slots join on one step. The new hand-off wires one row per call, so
-two joins need two calls before one decode step. This checks that.
+### Step 1. Is the serving stack here?
 
-```
-python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --steps 40 --join-together --modes every_step new_in prompt_ctx --out together.json
-```
+Look for the disaggregated serving package and image named in the bug report:
 
-Report whether `same_tokens_a` and `same_tokens_b` are True for `new_in` and `prompt_ctx`,
-and the table rows.
+- Is docker (or podman) installed, and can this user run it? List local images whose name
+  matches `vllm`, `disagg` or `cloud_ai`. List running containers.
+- Search for a directory or Python package with the container name from the report, and for
+  a `proxy/server.py` under it. Places: `/opt/qti-aic`, the home directory,
+  `/usr2/nrasheed`, `/local/mnt/workspace`, and the site-packages of any venv (read only).
+  Keep searches bounded (`-maxdepth`), do not scan network mounts.
+- Is a `vllm` package installed in any venv here? Which version, and does it contain QAIC
+  specific files (search its tree for `qaic`)?
+- If an image is present locally but not unpacked, you may list its files with a container
+  that has no devices attached and exits at once. Do not run its entrypoint.
 
-### Step 2. Is the neighbour effect a near-tie or a real difference?
+If nothing is found, stop here and report exactly where you looked.
 
-Run the example at the branch head twice with the six prompts, each as its own `--prompt`:
+### Step 2. If the code is found, answer these from the code
 
-| Run | Prompt order | Extra argument |
-|---|---|---|
-| F | 0, 1, 2, 3, 4, 5 (the usual order) | `--debug-dump dump_f.json` |
-| G | 4, 5, 0, 1, 2, 3 | `--debug-dump dump_g.json` |
-
-The dump holds, per prompt, the generated tokens and for each token the gap between the
-best and second-best logit (`top2_margin`; the first entry is null). The `prompts` list in
-each dump gives the order, so match prompts by their text, not by index.
-
-For every prompt whose tokens differ between F and G, find the first differing token index
-`i` and report: the two token ids, `top2_margin[i]` in F and in G, and the smallest margin
-among the 5 tokens before `i` in each run.
+1. Does it import `QEfficient`, or call `set_data_for_kv_handoff`, `setDataWithSlices` or
+   `qaicrt` directly? Name the files.
+2. How does KV get from a prefill worker to a decode worker? What does the hand-off service
+   do: copy bytes over a socket, shared memory, or pass device buffer handles?
+3. How much is handed off per request: the full compiled context, or only the prompt's
+   positions? Inputs only, or inputs and retained-state outputs?
+4. Are hand-off buffers allocated per request? Where are they freed?
+5. What happens, in order, between the proxy receiving a request and the first streamed
+   token? Note any fixed waits: `sleep`, poll intervals, timeouts, health checks, retries.
+6. What does the prefill capture-length flag from the report control?
+7. Is there a switch (flag, environment variable, log level) that prints per-stage timing?
 
 ### Report for this task
 
-- Step 1: the three table rows and the four True/False values.
-- Step 2: tok/sec of F and G; which prompts differ; for each, the numbers listed above.
-- One line: do the margins at the first difference look like near-ties (well under 0.1) or
-  not?
+- Step 1: found or not; image names and tags; package paths; vllm version.
+- Step 2: one or two lines per question, with file and function names. Say "not found" where
+  the code does not answer it.
+- One line: which of the seven answers you are least sure of.

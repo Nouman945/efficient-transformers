@@ -83,6 +83,15 @@ Results of task 2026-11-10-c:
   (100-token prompt), about 6 MB at 5000 tokens.
 - Four prefill chunks in flight is 3.0x faster but gives wrong tokens. Not usable as is.
 
+Results of task 2026-11-10-d:
+
+- Run C (upstream wiring, new join timing) and run D (new wiring, full-context row) both
+  give run B's text. So the wiring change and the prompt-sized row change no text. The
+  difference between A and B comes only from when each request joins.
+- Run E (old code, prompts reordered) changes the answers of prompts 0 and 1. So upstream
+  itself gives different text when the neighbours change. Run A is not a fixed reference.
+- Speed comes from the wiring: about 32 tok/sec with upstream wiring, about 43 with the new.
+
 Open questions the current and next tasks are meant to answer:
 
 1. Does the example-level change give the same answers as the old code when slots refill?
@@ -95,37 +104,43 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
-**Task id: 2026-11-10-d**
+**Task id: 2026-11-10-e**
 
-Goal: find which part of the example change produces the wrong text for prompts 3 and 5.
-The change has three parts: (1) slots join one per step, (2) only the joining slot's row is
-wired, inputs only, and rows stay on the device, (3) the row covers only the prompt's
-positions. Two debug switches were added to the example to separate them.
+Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss` and the branch head. No new
+compile should be needed; say so if one starts.
 
-Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss`. Use the example at the branch
-head. No new compile should be needed; say so if one starts.
+### Step 1. Can two requests join decode on the same step with the new hand-off?
 
-Run `examples/disagg_serving/gpt_oss_disagg_mode_cb_chunking_with_kv_share.py` with the
-same six prompts as before, each as its own `--prompt`, in the same order:
+Upstream lets several slots join on one step. The new hand-off wires one row per call, so
+two joins need two calls before one decode step. This checks that.
 
-| Run | Extra argument | Output file | What it isolates |
-|---|---|---|---|
-| C | `--debug-full-rewire` | `run_c.txt` | part (1) alone: upstream wiring, new join timing |
-| D | `--debug-full-ctx-row` | `run_d.txt` | parts (1) and (2), without (3) |
+```
+python3 examples/disagg_serving/gpt_oss_ttft_breakdown.py --num-hidden-layers 8 --mxfp6 --steps 40 --join-together --modes every_step new_in prompt_ctx --out together.json
+```
 
-Compare the generated text of all six prompts in C and in D with `before.txt` (run A) and
-`after.txt` (run B).
+Report whether `same_tokens_a` and `same_tokens_b` are True for `new_in` and `prompt_ctx`,
+and the table rows.
 
-If you have time left, also run the six prompts in this order with **old** code
-(`64b1b410` for the example file and `QEfficient/generation/_kv_dma_handoff.py`), output
-`run_e.txt`: prompts 4, 5, 0, 1, 2, 3 (so "Why is the sky blue?" first). Then restore the
-branch head. Compare each prompt's text with run A. This checks whether upstream itself
-changes an answer when the neighbours change.
+### Step 2. Is the neighbour effect a near-tie or a real difference?
+
+Run the example at the branch head twice with the six prompts, each as its own `--prompt`:
+
+| Run | Prompt order | Extra argument |
+|---|---|---|
+| F | 0, 1, 2, 3, 4, 5 (the usual order) | `--debug-dump dump_f.json` |
+| G | 4, 5, 0, 1, 2, 3 | `--debug-dump dump_g.json` |
+
+The dump holds, per prompt, the generated tokens and for each token the gap between the
+best and second-best logit (`top2_margin`; the first entry is null). The `prompts` list in
+each dump gives the order, so match prompts by their text, not by index.
+
+For every prompt whose tokens differ between F and G, find the first differing token index
+`i` and report: the two token ids, `top2_margin[i]` in F and in G, and the smallest margin
+among the 5 tokens before `i` in each run.
 
 ### Report for this task
 
-- Run C: tok/sec line; for each of the six prompts: equal to A, equal to B, or neither.
-- Run D: the same.
-- Run E, if done: for each prompt, equal to A or not, with the first differing character
-  index.
-- One line: which of parts (1), (2), (3) the evidence points to.
+- Step 1: the three table rows and the four True/False values.
+- Step 2: tok/sec of F and G; which prompts differ; for each, the numbers listed above.
+- One line: do the margins at the first difference look like near-ties (well under 0.1) or
+  not?

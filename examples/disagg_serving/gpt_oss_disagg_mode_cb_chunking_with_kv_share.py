@@ -8,6 +8,7 @@
 """Continuous-batching disaggregated prefill/decode for gpt-oss — DMA KV handoff."""
 
 import argparse
+import json
 from collections import deque
 from time import perf_counter
 
@@ -115,6 +116,7 @@ def run(
     non_subfunc_npi: str = DEFAULT_NON_SUBFUNC_NPI,
     debug_full_rewire: bool = False,
     debug_full_ctx_row: bool = False,
+    debug_dump: str = None,
 ):
     """Run CB (chunked-prefill + batched decode) over ``prompts`` with the DMA KV handoff."""
     prompts = list(prompts) if prompts else list(DEFAULT_PROMPTS)
@@ -206,6 +208,9 @@ def run(
     slot_prompt_idx = [-1] * full_batch_size
     slot_tokens = [None] * full_batch_size
     results = [None] * len(prompts)
+    # Debug only: gap between the best and second-best logit for every generated token.
+    slot_margins = [None] * full_batch_size
+    result_margins = [None] * len(prompts)
     # A prefilled slot joins decode only once its KV row is wired; one slot joins per step.
     joined = [False] * full_batch_size
     pending_handoffs = deque()
@@ -215,6 +220,7 @@ def run(
         pending_handoffs.append((slot, handoff))
         slot_prompt_idx[slot] = prompt_idx
         slot_tokens[slot] = [first_token]
+        slot_margins[slot] = [None]
         gen_count[slot] = 1
         last_token[slot] = first_token
         pos[slot] = next_pos
@@ -285,6 +291,7 @@ def run(
             if tok == tokenizer.eos_token_id or gen_count[slot] >= generation_len:
                 # Slot finished: record its output, then refill from the queue or retire.
                 results[slot_prompt_idx[slot]] = slot_tokens[slot]
+                result_margins[slot_prompt_idx[slot]] = slot_margins[slot]
                 if prompt_queue:
                     prompt_idx, prompt = prompt_queue.popleft()
                     lang_inputs, num_chunks = _prepare_prompt(prompt)
@@ -295,6 +302,9 @@ def run(
                     joined[slot] = False
             else:
                 slot_tokens[slot].append(tok)
+                if debug_dump:
+                    top2 = np.partition(logits[slot].astype(np.float32), -2)[-2:]
+                    slot_margins[slot].append(float(top2[1] - top2[0]))
                 gen_count[slot] += 1
                 last_token[slot] = tok
                 pos[slot] += 1
@@ -308,6 +318,9 @@ def run(
         first_tokens.append(toks[0] if toks else None)
         print(f"\ninput [{idx}]\n{prompt}\noutput\n{tokenizer.decode(toks)}")
 
+    if debug_dump:
+        with open(debug_dump, "w") as f:
+            json.dump({"prompts": prompts, "tokens": results, "top2_margin": result_margins}, f)
     return {"first_tokens": first_tokens, "tokens": results}
 
 
@@ -346,6 +359,11 @@ if __name__ == "__main__":
         action="store_true",
         help="debug: hand off the joining slot's row at full context length, not prompt length",
     )
+    parser.add_argument(
+        "--debug-dump",
+        default=None,
+        help="debug: write each prompt's tokens and top-2 logit gaps to this JSON file",
+    )
     args = parser.parse_args()
 
     run(
@@ -363,4 +381,5 @@ if __name__ == "__main__":
         non_subfunc_npi=args.non_subfunc_npi,
         debug_full_rewire=args.debug_full_rewire,
         debug_full_ctx_row=args.debug_full_ctx_row,
+        debug_dump=args.debug_dump,
     )

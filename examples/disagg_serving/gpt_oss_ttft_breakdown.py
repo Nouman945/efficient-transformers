@@ -173,7 +173,7 @@ def decode_wiring(decode, mode, kv_caches, slot, small):
     return inputs_map, small, slot
 
 
-def decode_step(decode, state, wiring=None):
+def decode_step(decode, state, wirings=None):
     """One decode step for every active slot. Returns (wire_ms, run_ms)."""
     n = len(state["active"])
     inputs = {name: np.full((n, 1), -1, dtype=np.int64) for name in ("input_ids", "position_ids", "batch_index")}
@@ -182,7 +182,7 @@ def decode_step(decode, state, wiring=None):
             inputs["input_ids"][slot, 0] = state["token"][slot]
             inputs["position_ids"][slot, 0] = state["pos"][slot]
             inputs["batch_index"][slot, 0] = slot
-    wire_ms = wire(decode, decode.decode_execObj_idx, *wiring) if wiring else 0.0
+    wire_ms = sum(wire(decode, decode.decode_execObj_idx, *wiring) for wiring in wirings or [])
     start = perf_counter()
     exec_idx = decode.np_run(inputs, is_prefill=False)
     decode.complete_inf(exec_idx, is_prefill=False)
@@ -202,6 +202,7 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
     n = args.full_batch_size
     state = {"active": [False] * n, "token": [0] * n, "pos": [0] * n, "out": [[] for _ in range(n)]}
     result = {}
+    pending = []
     for tag, slot, prompt in zip("ab", (args.slot_a, args.slot_b), prompts):
         small = None
         handoff = [kv[slot : slot + 1] for kv in kv_caches]
@@ -209,17 +210,27 @@ def scenario(prefill, decode, kv_caches, prompts, mode, args):
             small = [np.zeros((1, kv.shape[1], prompt[0].shape[1], kv.shape[3]), dtype=kv.dtype) for kv in kv_caches]
             handoff = small
         token, pos, times = run_prefill(prefill, prompt, slot, handoff, args.prefill_seq_len, args.prefill_inflight)
-        state["active"][slot], state["token"][slot], state["pos"][slot] = True, token, pos
+        state["token"][slot], state["pos"][slot] = token, pos
         state["out"][slot].append(token)
-        wiring = decode_wiring(decode, mode, kv_caches, slot, small)
-        steps = [decode_step(decode, state, wiring)]
-        for _ in range(args.steps - 1):
-            steps.append(decode_step(decode, state, wiring if mode == "every_step" else None))
+        pending.append((slot, decode_wiring(decode, mode, kv_caches, slot, small)))
         result[f"{tag}_prefill_ms"] = times["prefill_ms"]
         result[f"{tag}_prefill_wire_ms"] = times["prefill_wire_ms"]
-        result[f"{tag}_decode_wire_ms"] = steps[0][0]
-        result[f"{tag}_first_step_ms"] = steps[0][1]
-        result[f"{tag}_steady_step_ms"] = median(wire_ms + run_ms for wire_ms, run_ms in steps[1:])
+        if args.join_together and tag == "a":
+            continue  # A waits; both requests join decode on the same step
+        for pending_slot, _ in pending:
+            state["active"][pending_slot] = True
+        # The all-rows modes need one wiring; the per-row modes need one per joining slot.
+        wirings = [wiring for _, wiring in pending]
+        if mode in ("every_step", "all_once"):
+            wirings = wirings[-1:]
+        pending = []
+        steps = [decode_step(decode, state, wirings)]
+        for _ in range(args.steps - 1):
+            steps.append(decode_step(decode, state, wirings if mode == "every_step" else None))
+        for joined_tag in "ab" if args.join_together else tag:
+            result[f"{joined_tag}_decode_wire_ms"] = steps[0][0]
+            result[f"{joined_tag}_first_step_ms"] = steps[0][1]
+            result[f"{joined_tag}_steady_step_ms"] = median(wire_ms + run_ms for wire_ms, run_ms in steps[1:])
     result["tokens_a"], result["tokens_b"] = state["out"][args.slot_a], state["out"][args.slot_b]
     return result
 
@@ -310,6 +321,11 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="prefill chunks queued on the cards at once; at most --stages",
+    )
+    parser.add_argument(
+        "--join-together",
+        action="store_true",
+        help="prefill both requests first, then let both join decode on the same step",
     )
     parser.add_argument("--slot-a", type=int, default=0, help="decode slot of request A")
     parser.add_argument("--slot-b", type=int, default=1, help="decode slot of request B")

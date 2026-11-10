@@ -107,6 +107,22 @@ disaggregated serving container with separate prefill and decode worker processe
 request proxy, and a KV hand-off service between them, at decode batch size 1. None of that
 code is in this repository. It is not yet shown that anything measured here applies there.
 
+Results of task 2026-11-11-f (read from code of nearby versions, not the deployed build):
+
+- The exact serving build from the bug report is not on this machine. A newer disaggregated
+  serving image and the SDK's serving patches (an older and a newer version) are.
+- The serving stack uses this repository only to export and compile. Its KV hand-off is its
+  own code. It already hands off only the joining slot's row and the prompt's positions,
+  inputs only, through shared memory. So the hand-off change made in this repository is not
+  a fix for the bug report. It only speeds up the example here.
+- The first-token path there is: proxy sends the request to a prefill worker and waits for
+  the full reply, then sends it to a decode worker, which fetches the KV, binds it and runs
+  the first step. Two HTTP round trips in a row, a new connection per hop. No long sleep
+  was seen in the code.
+- Shared-memory segments that a decode worker never fetches are freed only when the
+  hand-off service shuts down. Possible link to the memory growth. Not checked on a
+  running system.
+
 Open questions the current and next tasks are meant to answer:
 
 1. Does the example-level change give the same answers as the old code when slots refill?
@@ -119,50 +135,56 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
-**Task id: 2026-11-11-f**
+**Task id: 2026-11-11-g**
 
-Read-only discovery. No compile, no model run, no device use. Do not pull or download
-images or packages. Do not start a serving container. Do not copy any source code you find
-into this repository or into the report; give paths, names and short answers only.
+Goal: measure the first-token path on a running disaggregated serving stack on this
+machine, with `openai/gpt-oss-20b`, one prefill worker and one decode worker, and split the
+time into its hops. This uses the newer serving image that task f found locally, so the
+numbers are for that version, not for the deployed one.
 
-Goal: find out whether the code of the real serving stack from the bug report is on this
-machine, and if so, how the first token is produced there. Read the bug report first (ask
-the user for its path) to get the exact image name, container name, ports and flags.
+### Rules for this task (in addition to the standing rules)
 
-### Step 1. Is the serving stack here?
+- **Before you start any container, show the user the exact command and wait for a yes.**
+  The image was not built by this user. If the user says no, stop and report that.
+- Do not pull or build images. Do not touch containers of other users.
+- Use only devices that `qaic-util -q` shows as free. Give the container its own name. No
+  restart policy. Pick ports that are not in use.
+- Find the launch procedure from the launcher and docs inside the image, and from the launch
+  command in the bug report (ask the user for its path). Do not guess flags.
+- Keep the report's settings where the small model allows: 256-token prefill chunk, decode
+  batch size 1, 4 devices per worker. Use context 32768 if the compile for it finishes in
+  about an hour; otherwise 8192, and say which. Check disk space first.
+- Put the client script and logs under `results-logs/`. Nothing new in tracked files.
+- At the end stop and remove your container and confirm the devices are free again.
 
-Look for the disaggregated serving package and image named in the bug report:
+### Step 1. Bring up 1 prefill + 1 decode + hand-off service + proxy
 
-- Is docker (or podman) installed, and can this user run it? List local images whose name
-  matches `vllm`, `disagg` or `cloud_ai`. List running containers.
-- Search for a directory or Python package with the container name from the report, and for
-  a `proxy/server.py` under it. Places: `/opt/qti-aic`, the home directory,
-  `/usr2/nrasheed`, `/local/mnt/workspace`, and the site-packages of any venv (read only).
-  Keep searches bounded (`-maxdepth`), do not scan network mounts.
-- Is a `vllm` package installed in any venv here? Which version, and does it contain QAIC
-  specific files (search its tree for `qaic`)?
-- If an image is present locally but not unpacked, you may list its files with a container
-  that has no devices attached and exits at once. Do not run its entrypoint.
+Report compile time (if any), start-up time, and the versions in use.
 
-If nothing is found, stop here and report exactly where you looked.
+### Step 2. First-token time through the proxy
 
-### Step 2. If the code is found, answer these from the code
+Three prompt sizes: about 100, 500 and 1000 tokens. Temperature 0, a unique prefix per
+request, one request at a time, 5 requests per size, streaming. Record time to the first
+streamed token. Send one non-streamed request per size to get the server's own
+`prompt_tokens`, and report that number, not the target size.
 
-1. Does it import `QEfficient`, or call `set_data_for_kv_handoff`, `setDataWithSlices` or
-   `qaicrt` directly? Name the files.
-2. How does KV get from a prefill worker to a decode worker? What does the hand-off service
-   do: copy bytes over a socket, shared memory, or pass device buffer handles?
-3. How much is handed off per request: the full compiled context, or only the prompt's
-   positions? Inputs only, or inputs and retained-state outputs?
-4. Are hand-off buffers allocated per request? Where are they freed?
-5. What happens, in order, between the proxy receiving a request and the first streamed
-   token? Note any fixed waits: `sleep`, poll intervals, timeouts, health checks, retries.
-6. What does the prefill capture-length flag from the report control?
-7. Is there a switch (flag, environment variable, log level) that prints per-stage timing?
+### Step 3. Split the time by hop
+
+For the same three sizes, 5 requests each, call the workers directly in the same order the
+proxy does:
+
+1. The prefill worker alone, the way the proxy calls it. Time the full reply.
+2. Then the decode worker alone with the same request, streaming. Time to the first token.
+
+Also turn on the per-stage timing switches you listed under question 7 of task f, if they
+do not change the request path, and read out what they print for one request per size.
 
 ### Report for this task
 
-- Step 1: found or not; image names and tags; package paths; vllm version.
-- Step 2: one or two lines per question, with file and function names. Say "not found" where
-  the code does not answer it.
-- One line: which of the seven answers you are least sure of.
+- Step 1: done or failed, versions, context used, compile and start-up time.
+- One table, one row per size: server prompt tokens, chunks, proxy first token (median),
+  prefill hop (median), decode hop to first token (median), sum of the two hops.
+- A fit of proxy first-token time as fixed + per chunk.
+- Any per-stage timing lines that show where the decode hop spends its time before the
+  first token.
+- Cleanup: container removed, devices free.

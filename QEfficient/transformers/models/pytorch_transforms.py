@@ -1873,6 +1873,16 @@ class OptimizedMoEExportConfigTransform(PytorchTransform):
                 if num_ffn_blocks <= 0:
                     raise ValueError(f"moe_config['num_ffn_blocks'] must be a positive integer, got {num_ffn_blocks}")
             module.expert_num_ffn_blocks = num_ffn_blocks
+            decode_bmm_token_block_size = moe_config.get("decode_bmm_token_block_size", None)
+            if decode_bmm_token_block_size is not None:
+                decode_bmm_token_block_size = int(decode_bmm_token_block_size)
+                if decode_bmm_token_block_size <= 0:
+                    raise ValueError(
+                        f"moe_config['decode_bmm_token_block_size'] must be a positive integer, "
+                        f"got {decode_bmm_token_block_size}"
+                    )
+                module.decode_bmm_num_token_blocks = max(1, -(-compile_batch_size // decode_bmm_token_block_size))
+            module.decode_bmm_token_block_size = decode_bmm_token_block_size
             transformed = True
 
         if uses_expert_parallel and compile_num_tokens % expert_parallel_chunk_size != 0:

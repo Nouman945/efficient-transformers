@@ -61,6 +61,9 @@ class QEffMoEBlockMixin(metaclass=ABCMeta):
     expert_parallel_num_packed_chunks: int = 1
     expert_intermediate_block_size: int | None = None
     expert_num_ffn_blocks: int | None = None
+    # Decode gather+bmm token blocking, set by OptimizedMoETransform from moe_config.
+    decode_bmm_token_block_size: int | None = None
+    decode_bmm_num_token_blocks: int = 1
     # Set by OptimizedMoEWeightsTransform after model-local canonicalization.
     weights_transformed: bool = False
 
@@ -139,7 +142,28 @@ class QEffMoEBlockMixin(metaclass=ABCMeta):
             topk_indices, topk_weights = topk
             if quantized_experts:
                 return moe_quantized_decode_bmm(x, topk_indices, topk_weights, quantized_weights, self.act_fn)
-            return moe_decode_bmm(x, topk_indices, topk_weights, weights, profile, top_k=topk_indices.shape[1])
+            top_k = topk_indices.shape[1]
+            block_size = getattr(self, "decode_bmm_token_block_size", None)
+            num_blocks = getattr(self, "decode_bmm_num_token_blocks", 1)
+            if block_size is None or num_blocks <= 1:
+                return moe_decode_bmm(x, topk_indices, topk_weights, weights, profile, top_k=top_k)
+            # Gather and matmul a few token rows at a time. The last block is open-ended so no
+            # row is dropped when the runtime batch is larger than the batch seen at export.
+            outputs = []
+            for block_idx in range(num_blocks):
+                start = block_idx * block_size
+                stop = None if block_idx == num_blocks - 1 else start + block_size
+                outputs.append(
+                    moe_decode_bmm(
+                        x[start:stop],
+                        topk_indices[start:stop],
+                        topk_weights[start:stop],
+                        weights,
+                        profile,
+                        top_k=top_k,
+                    )
+                )
+            return torch.cat(outputs, dim=0)
 
         dense, _ = resolve_routing(routing, num_experts)
         if flavour is MoEFlavour.EXPERT_PARALLEL:

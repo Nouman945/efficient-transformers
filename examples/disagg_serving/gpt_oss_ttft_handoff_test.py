@@ -46,6 +46,8 @@ def compile_sessions(qeff_model, args, ctx_len):
         mxint8_kv_cache=args.mxint8_kv,
     )
     decode_kwargs = {"node_precision_info": args.non_subfunc_npi} if args.non_subfunc_npi else {}
+    if args.decode_bmm_block:
+        decode_kwargs["qaic_config"] = {"moe_config": {"decode_bmm_token_block_size": args.decode_bmm_block}}
     prefill_kwargs = {"node_precision_info": args.subfunc_npi} if args.subfunc_npi else {}
     decode_qpc = qeff_model.compile(
         prefill_seq_len=1,
@@ -235,6 +237,12 @@ if __name__ == "__main__":
         "--handoff-once",
         action="store_true",
         help="wire the KV buffers on the first decode step only, not on every step",
+    )
+    parser.add_argument(
+        "--decode-bmm-block",
+        type=int,
+        default=None,
+        help="decode MoE: gather and matmul this many batch rows at a time",
     )
     parser.add_argument("--out", default="gpt_oss_ttft_handoff.json")
     main(parser.parse_args())

@@ -135,14 +135,13 @@ def run(
 
     assert "batch_index" in decode_session.binding_index_map, "batch_index not a compiled decode input binding"
 
-    # Shared host KV arrays, allocated once in decode-map order. Under CB the leading batch
-    # dim is full_batch_size, so each family is [N, ...]: prefill writes one row, decode
-    # reads/writes all N. gpt-oss is hybrid, so families carry a mix of shapes.
-    kv_caches = [np.zeros(shape, dtype=dtype) for (shape, dtype) in decode_session.kv_cache_info]
-    assert kv_caches and kv_caches[0].shape[0] == full_batch_size, (
-        f"decode KV batch dim {kv_caches[0].shape[0] if kv_caches else None} != full_batch_size {full_batch_size}"
+    # KV geometry in decode-map order. Under CB the leading batch dim is full_batch_size.
+    # The hand-off moves one slot's row and only the prompt's context positions, so the
+    # host buffers are allocated per request at that size, not at [N, ..., ctx_len, ...].
+    kv_cache_info = decode_session.kv_cache_info
+    assert kv_cache_info and kv_cache_info[0][0][0] == full_batch_size, (
+        f"decode KV batch dim {kv_cache_info[0][0][0] if kv_cache_info else None} != full_batch_size {full_batch_size}"
     )
-    decode_kv_map = decode_session.decode_buff_map + decode_session.decode_rs_kv_only_buff_map
 
     def _prepare_prompt(prompt: str):
         """Tokenise one prompt, padded to a multiple of ``prefill_seq_len``.
@@ -164,11 +163,12 @@ def run(
         """Chunked prefill of one prompt into KV ``slot``.
 
         Every chunk carries ``batch_index=slot`` so the on-device scatter accumulates into
-        row ``slot``; the last chunk wires the DMA handoff of that single row into
-        ``kv_caches[*][slot]``. Returns ``(first_token, next_pos)``.
+        row ``slot``; the last chunk wires the DMA handoff of that single row, prompt
+        positions only, into fresh host buffers. Returns ``(first_token, next_pos, handoff)``.
         """
         chunk_inputs = {"batch_index": np.array([[slot]], dtype=np.int64)}
-        slot_kv_view = [kv[slot : slot + 1] for kv in kv_caches]
+        prompt_len = lang_inputs["input_ids"].shape[1]
+        slot_kv_view = [np.empty((1, shape[1], prompt_len, shape[3]), dtype=dtype) for (shape, dtype) in kv_cache_info]
         exec_idx = None
         for i in range(num_chunks):
             chunk_inputs["input_ids"] = lang_inputs["input_ids"][:, i * prefill_seq_len : (i + 1) * prefill_seq_len]
@@ -186,7 +186,7 @@ def run(
         prefill_out = prefill_session.get_outputs(index=exec_idx)
         first_token = int(np.argmax(prefill_out["logits"]))
         next_pos = int(np.max(lang_inputs["position_ids"])) + 1
-        return first_token, next_pos
+        return first_token, next_pos, slot_kv_view
 
     ongoing = [False] * full_batch_size
     last_token = [0] * full_batch_size
@@ -195,8 +195,13 @@ def run(
     slot_prompt_idx = [-1] * full_batch_size
     slot_tokens = [None] * full_batch_size
     results = [None] * len(prompts)
+    # A prefilled slot joins decode only once its KV row is wired; one slot joins per step.
+    joined = [False] * full_batch_size
+    pending_handoffs = deque()
 
-    def _seed_slot(slot, prompt_idx, first_token, next_pos):
+    def _seed_slot(slot, prompt_idx, first_token, next_pos, handoff):
+        joined[slot] = False
+        pending_handoffs.append((slot, handoff))
         slot_prompt_idx[slot] = prompt_idx
         slot_tokens[slot] = [first_token]
         gen_count[slot] = 1
@@ -214,8 +219,8 @@ def run(
             break
         prompt_idx, prompt = prompt_queue.popleft()
         lang_inputs, num_chunks = _prepare_prompt(prompt)
-        ft, next_pos = _prefill_slot(lang_inputs, num_chunks, slot)
-        _seed_slot(slot, prompt_idx, ft, next_pos)
+        ft, next_pos, handoff = _prefill_slot(lang_inputs, num_chunks, slot)
+        _seed_slot(slot, prompt_idx, ft, next_pos, handoff)
     print(f"Initial prefill time : {perf_counter() - prefill_start:.2f} secs")
 
     def _build_decode_inputs():
@@ -223,7 +228,7 @@ def run(
         position_ids = np.full((full_batch_size, 1), -1, dtype=np.int64)
         batch_index = np.full((full_batch_size, 1), -1, dtype=np.int64)
         for slot in range(full_batch_size):
-            if not ongoing[slot]:
+            if not joined[slot]:
                 continue
             input_ids[slot, 0] = last_token[slot]
             position_ids[slot, 0] = pos[slot]
@@ -233,14 +238,17 @@ def run(
     st = perf_counter()
     decode_steps = 0
     while any(ongoing):
-        # Wire the full [N, ...] KV buffers once (identity: device row i <-> host row i);
-        # per-slot addressing is carried by the decode batch_index input above.
-        decode_session.set_data_for_kv_handoff(
-            kv_caches + kv_caches,
-            [("batch_index", 0), ("ctx_start", 0)],
-            index=decode_session.decode_execObj_idx,
-            buff_map=decode_kv_map,
-        )
+        # Upload the KV row of one newly prefilled slot. Rows of running slots stay on the
+        # device as retained state, so nothing else crosses the host on this or later steps.
+        if pending_handoffs:
+            slot, handoff = pending_handoffs.popleft()
+            decode_session.set_data_for_kv_handoff(
+                handoff,
+                [("batch_index", slot), ("ctx_start", 0)],
+                index=decode_session.decode_execObj_idx,
+                buff_map=decode_session.decode_buff_map,
+            )
+            joined[slot] = True
         decode_inputs = _build_decode_inputs()
         exec_idx = decode_session.np_run(decode_inputs, is_prefill=False)
         decode_session.complete_inf(exec_idx, is_prefill=False)
@@ -252,7 +260,7 @@ def run(
         next_tokens = np.argmax(logits, axis=-1)
 
         for slot in range(full_batch_size):
-            if not ongoing[slot]:
+            if not joined[slot]:
                 continue
             tok = int(next_tokens[slot])
             if tok == tokenizer.eos_token_id or gen_count[slot] >= generation_len:
@@ -261,10 +269,11 @@ def run(
                 if prompt_queue:
                     prompt_idx, prompt = prompt_queue.popleft()
                     lang_inputs, num_chunks = _prepare_prompt(prompt)
-                    ft, next_pos = _prefill_slot(lang_inputs, num_chunks, slot)
-                    _seed_slot(slot, prompt_idx, ft, next_pos)
+                    ft, next_pos, handoff = _prefill_slot(lang_inputs, num_chunks, slot)
+                    _seed_slot(slot, prompt_idx, ft, next_pos, handoff)
                 else:
                     ongoing[slot] = False
+                    joined[slot] = False
             else:
                 slot_tokens[slot].append(tok)
                 gen_count[slot] += 1

@@ -270,19 +270,19 @@ class KvDmaHandoff:
             binding = self.session.bindings[binding_index]
             binding_shape = tuple(binding.dims)
             buf_shape = tuple(buf.shape)
-            # Dim 0 (batch) is sliced by "batch_index" in the DimSpec, so a buffer
-            # covering a single row (e.g. one prefill slot) legitimately has a
-            # smaller dim 0 than the binding's full compiled shape. Every other
-            # dim is written in full and must match exactly.
-            shape_ok = (
-                len(binding_shape) == len(buf_shape)
-                and binding_shape[1:] == buf_shape[1:]
-                and 1 <= buf_shape[0] <= binding_shape[0]
+            # Dims with a symbolic start in the DimSpec ("batch_index", "ctx_start") are
+            # sliced, so a buffer may cover fewer rows (e.g. one prefill slot) or fewer
+            # context positions (e.g. only the prompt) than the binding's compiled shape.
+            # Every other dim is transferred in full and must match exactly.
+            dim_spec = FULL_ATTN_DIMSPEC if len(binding_shape) == 4 else LINEAR_ATTN_DIMSPEC
+            shape_ok = len(binding_shape) == len(buf_shape) == len(dim_spec) and all(
+                (1 <= buf_dim <= binding_dim) if isinstance(spec["start"], str) else (buf_dim == binding_dim)
+                for spec, buf_dim, binding_dim in zip(dim_spec, buf_shape, binding_shape)
             )
             if not shape_ok:
                 raise ValueError(
                     f"KV buffer shape mismatch for {name!r} (binding {binding_index}): "
-                    f"expected {binding_shape} (or a smaller dim-0 slice of it), got {buf_shape}"
+                    f"expected {binding_shape} (or a smaller slice of its batch/context dims), got {buf_shape}"
                 )
             expected_dtype = self.session.aic_to_np_dtype_mapping[binding.type]
             if expected_dtype != buf.dtype:

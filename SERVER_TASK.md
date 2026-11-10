@@ -32,9 +32,50 @@ and the last 10 lines of the traceback. Say clearly which steps were done, skipp
 
 ---
 
+## The bug this work is for
+
+This repository copy is public. The description here is kept generic on purpose. The full
+bug report is confidential and must stay out of git: no customer name, no report numbers,
+no report text in any tracked file, commit message or branch name.
+
+**Full details are on this machine, not in this file.** At the start of a task, ask the user
+for the path of the bug report if you have not read it in this session, and read it there.
+Use it to understand the work. Do not copy from it into the repository.
+
+Generic statement of the bug:
+
+- Model and mode: `openai/gpt-oss-120b`, disaggregated serving (separate prefill and decode
+  workers, KV handed from prefill to decode).
+- Symptom: every request pays a fixed first-token cost that does not depend on prompt
+  length, on top of the per-chunk prefill time.
+- Question to answer: where does the fixed part go (scheduling, KV hand-off), and can it be
+  reduced?
+
+What has been found so far on this server (public example code, gpt-oss-20b, reduced depth):
+
+- The KV hand-off moves the full compiled context for every slot, whatever the prompt
+  length. Its cost grows with context length and slot count.
+- Handing off only the joining slot's row, inputs only, and only the prompt's positions
+  removed almost all of that cost with identical tokens for 1, 3 and 10 chunk prompts.
+  This is mode `prompt_ctx` in `examples/disagg_serving/gpt_oss_ttft_breakdown.py`.
+- Re-wiring all rows only when a request joins (mode `all_once`) gives wrong tokens for the
+  request that was already running. Do not use it.
+- Prefill time is the same per chunk at every prompt length, so prefill has no fixed cost
+  of its own in these runs.
+
+Open questions the current and next tasks are meant to answer:
+
+1. Does the example-level change give the same answers as the old code when slots refill?
+2. Does memory grow per request with the old hand-off, and does the new one stop it?
+3. Can prefill chunks overlap across pipeline stages, and how much faster is that?
+4. How much of the fixed cost in the real serving stack is outside this repository
+   (the hand-off between worker processes)? That code is not here.
+
+---
+
 ## Current task
 
-**Task id: 2026-11-10-a**
+**Task id: 2026-11-10-b** (same steps as 2026-11-10-a; a bug section was added above)
 
 ### Step 1. Give this checkout its own environment
 

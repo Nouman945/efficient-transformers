@@ -32,9 +32,9 @@ FILLER_TEXT = "The quick brown fox jumps over the lazy dog near the quiet river 
 
 def compile_sessions(qeff_model, args, ctx_len):
     """Compile the decode and prefill QPCs for one context length and open both sessions."""
+    kv_rows = args.kv_cache_batch_size or args.full_batch_size
     common = dict(
         ctx_len=ctx_len,
-        full_batch_size=args.full_batch_size,
         num_cores=NUM_CORES,
         mos=1,
         aic_enable_depth_first=True,
@@ -51,6 +51,8 @@ def compile_sessions(qeff_model, args, ctx_len):
     prefill_kwargs = {"node_precision_info": args.subfunc_npi} if args.subfunc_npi else {}
     decode_qpc = qeff_model.compile(
         prefill_seq_len=1,
+        full_batch_size=args.full_batch_size,
+        kv_cache_batch_size=kv_rows,
         num_devices=args.decode_num_devices,
         offload_pt_weights=False,
         **common,
@@ -58,6 +60,7 @@ def compile_sessions(qeff_model, args, ctx_len):
     )
     prefill_qpc = qeff_model.compile(
         prefill_seq_len=args.prefill_seq_len,
+        full_batch_size=kv_rows,
         num_devices=args.prefill_num_devices,
         mdp_num_partitions=args.stages,
         qaic_config={"moe_config": {"expert_parallel_chunk_size": MOE_PREFILL_PACKED_CHUNK_SIZE}},
@@ -71,14 +74,14 @@ def compile_sessions(qeff_model, args, ctx_len):
         device_ids=args.prefill_device_ids,
         kv_dma_share=True,
         stages=args.stages,
-        full_batch_size=args.full_batch_size,
+        full_batch_size=kv_rows,
         cluster_id="prefill",
     )
     decode = QAICInferenceSession(
         decode_qpc,
         device_ids=args.decode_device_ids,
         kv_dma_share=True,
-        full_batch_size=args.full_batch_size,
+        full_batch_size=kv_rows,
         cluster_id="decode",
     )
     return prefill, decode
@@ -222,6 +225,12 @@ if __name__ == "__main__":
     parser.add_argument("--short-prompt", type=int, default=100, help="tokens in the short prompt")
     parser.add_argument("--num-hidden-layers", type=int, default=None, help="reduce depth for fast compiles")
     parser.add_argument("--full-batch-size", type=int, default=4)
+    parser.add_argument(
+        "--kv-cache-batch-size",
+        type=int,
+        default=None,
+        help="KV rows kept on the cards; decode still runs --full-batch-size rows per step",
+    )
     parser.add_argument("--stages", type=int, default=4, help="prefill pipeline depth (mdp_num_partitions)")
     parser.add_argument("--prefill-num-devices", type=int, default=8)
     parser.add_argument("--decode-num-devices", type=int, default=4)

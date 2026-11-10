@@ -195,8 +195,11 @@ def run(
     slot_prompt_idx = [-1] * full_batch_size
     slot_tokens = [None] * full_batch_size
     results = [None] * len(prompts)
+    kv_rewire_needed = True
 
     def _seed_slot(slot, prompt_idx, first_token, next_pos):
+        nonlocal kv_rewire_needed
+        kv_rewire_needed = True
         slot_prompt_idx[slot] = prompt_idx
         slot_tokens[slot] = [first_token]
         gen_count[slot] = 1
@@ -233,14 +236,18 @@ def run(
     st = perf_counter()
     decode_steps = 0
     while any(ongoing):
-        # Wire the full [N, ...] KV buffers once (identity: device row i <-> host row i);
-        # per-slot addressing is carried by the decode batch_index input above.
-        decode_session.set_data_for_kv_handoff(
-            kv_caches + kv_caches,
-            [("batch_index", 0), ("ctx_start", 0)],
-            index=decode_session.decode_execObj_idx,
-            buff_map=decode_kv_map,
-        )
+        # Wire the full [N, ...] KV buffers (identity: device row i <-> host row i) only when a
+        # slot was (re)filled by prefill. The call costs time in proportion to the KV buffer
+        # size, so it is not repeated on every step. Per-slot addressing is carried by the
+        # decode batch_index input above.
+        if kv_rewire_needed:
+            decode_session.set_data_for_kv_handoff(
+                kv_caches + kv_caches,
+                [("batch_index", 0), ("ctx_start", 0)],
+                index=decode_session.decode_execObj_idx,
+                buff_map=decode_kv_map,
+            )
+            kv_rewire_needed = False
         decode_inputs = _build_decode_inputs()
         exec_idx = decode_session.np_run(decode_inputs, is_prefill=False)
         decode_session.complete_inf(exec_idx, is_prefill=False)

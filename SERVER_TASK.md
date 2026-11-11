@@ -150,142 +150,70 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
-**Task id: 2026-11-11-i**
+**Task id: 2026-11-11-k**
 
-Read-only inventory of this server, so the remote agent knows what it can reproduce here.
-No compile, no model run, no downloads, no pulls, no container start. Do not print tokens,
-passwords, proxy credentials or IP addresses. Write the full output of every command to
-`results-logs/server_inventory.txt`; the report is only the summary.
+The user has given a standing go-ahead for the tests in this file. You do not need to ask
+before starting your own serving container from the same local image and in the same way
+as task g. Still ask before deleting anything you did not create in this task, before
+using another image, and before anything that touches other users.
 
-Collect:
+Same stack, model and rules as task g: gpt-oss-20b, 1 prefill + 1 decode worker, context
+32768, decode batch 1, own container name, free devices only, no restart policy, clean up
+at the end. Reuse the task g exports. Check disk before each compile. Do the parts in
+order; if one fails, report it and go on to the next.
 
-1. **Host.** CPU model, sockets, cores, threads, NUMA nodes. RAM total and free. OS and
-   kernel. Python versions available.
-2. **Cards.** From `/opt/qti-aic/tools/qaic-util -q`: number of cards and devices, how many
-   are free, device status values seen, firmware and SDK versions, memory per device, and
-   any device that is not Ready. Which user's processes hold the busy devices.
-3. **SDK.** Platform SDK and Apps SDK versions installed. What is under
-   `/opt/qti-aic/integrations/` (names and versions only).
-4. **Containers.** docker or podman version; whether this user can run it; local images
-   (repository, tag, size); running containers (name, image, owner if visible). Whether a
-   registry is configured from which the serving image named in the bug report could be
-   obtained (check config only, do not pull).
-5. **Ports.** Whether these are free: 5066, 7000, 6800-6807, 6900-6907.
-6. **Shared memory and limits.** Size and free space of `/dev/shm`; `ulimit -a` for this
-   user; hugepage settings; `vm.max_map_count`.
-7. **Disk.** Free space on `/local/mnt`, `/usr2`, the home directory and `/tmp`.
-8. **Models already here.** In the Hugging Face cache and `QEFF_HOME` (see `~/.cshrc`):
-   which models are cached, with sizes. Say whether `openai/gpt-oss-20b` and
-   `openai/gpt-oss-120b` weights are present and complete. List existing compiled QPC
-   folders for gpt-oss with their size and, from their config files, context length, batch
-   size, device count and whether they are prefill or decode.
-9. **Environments.** Each venv under `/local/mnt/workspace/nrasheed` with its Python,
-   `QEfficient`, `transformers`, `torch` and `onnx` versions, and whether `vllm` is in it.
-10. **Network.** Whether `huggingface.co` is reachable from this host (one HEAD request), and
-    whether a proxy variable is set (yes or no only).
+### Part A. Quick facts (no model run)
 
-### Report for this task
+One line each: free devices; free disk on `/local/mnt` and where `QEFF_HOME` lives; size
+and free space of `/dev/shm`; whether `openai/gpt-oss-120b` weights are in the Hugging Face
+cache and complete; size of each task g export; from those sizes, your estimate of the disk
+a 120b prefill + decode export at the same settings would need, and whether it fits here.
 
-Up to 45 lines. If it does not fit one screen, split it into `PART 1/2` and `PART 2/2`,
-each ending with a blank line, so two photos cover it. One or two lines per item above,
-numbers only. End with:
+### Part B. Staircase (task g setup, 256-token chunk, 4 prefill devices)
 
-- What on this server would block a run of one prefill worker plus one decode worker of
-  gpt-oss-120b at 32K context (devices, disk, shared memory, missing weights, missing image).
-- Anything unusual you saw that the remote agent did not ask about.
+Time the first token through the proxy, 5 requests each, median, for server prompt sizes
+just under and just over each chunk boundary: about 100, 250, 260, 510, 520, 765, 775,
+1020, 1030, and one long prompt of about 4000 tokens. Report server prompt tokens, chunks,
+time, and the per-stage time and chunks in flight from the per-stage timing switch.
 
----
+### Part C. Is the wrong decode text real?
 
-## Next timing task, only when the user asks for it by id
+Task g saw wrong text for prompts of 136 tokens and more. Find out what decides it:
 
-**Task id: 2026-11-11-j**
+- Find the exact prompt length where the text turns wrong (between 118 and 136).
+- Does it follow the model's sliding-window length, the chunk length, or neither?
+- Is the first token wrong, or only later ones? Is the prefill worker's own reply right?
+- Does it change if the start-up override from task g is set differently, or with any
+  full-KV-transfer switch the stack offers? Try only switches that exist in the code.
 
-Goal: test the pipeline-depth explanation from task g and try the two obvious ways to cut
-the first-token time for short prompts. Same stack, model and rules as task g (ask the user
-before starting a container; clean up at the end). Reuse the task g exports where possible.
-Before compiling, check disk; if space is short, ask the user whether older exports of this
-work may be deleted, do not delete on your own.
+### Part D. Smaller chunk
 
-1. **Staircase.** With the task g setup, time the first token (5 requests each, median) for
-   server prompt sizes just under and just over each chunk boundary: about 100, 250, 260,
-   510, 520, 765, 775, 1020, 1030 tokens. Report the size, chunks and time. Expected: flat
-   inside a chunk, a step of about one stage time at each boundary.
-2. **Smaller chunk.** Compile prefill with a 128-token chunk (and 64 if time allows), same
-   other settings. Time the first token at about 60, 100, 250, 500 and 1000 prompt tokens.
-   Report the per-stage time from the per-stage timing switch.
-3. **Fewer stages.** If the launcher and compile allow the prefill worker to use 2 devices
-   (2 pipeline stages) for this model, do the same timing at about 100 and 1000 tokens with
-   the 256-token chunk. If it is not supported, say so and skip.
-4. For each configuration report: compile time, per-stage time, chunks in flight, and
-   whether decode text is correct for one prompt under and one over 136 tokens.
+Compile prefill with a 128-token chunk, other settings the same. Time the first token at
+about 60, 100, 250, 500 and 1000 prompt tokens. Report per-stage time. If time and disk
+allow, repeat with a 64-token chunk.
 
-Report: one table per step, then one line each: does first-token time equal
-(stages + chunks - 1) x stage time when all chunks can be in flight; how the stage time
-changes with chunk length; which configuration gave the lowest first token at 100 tokens.
+### Part E. Fewer stages
 
----
-
-## Later task, only when the user asks for it by id
-
-**Task id: 2026-11-11-g**
-
-This is the serving-stack timing task. Run it only when the user asks for it by id.
-
-Goal: measure the first-token path on a running disaggregated serving stack on this
-machine, with `openai/gpt-oss-20b`, one prefill worker and one decode worker, and split the
-time into its hops. This uses the newer serving image that task f found locally, so the
-numbers are for that version, not for the deployed one.
-
-### Rules for this task (in addition to the standing rules)
-
-- **Before you start any container, show the user the exact command and wait for a yes.**
-  The image was not built by this user. If the user says no, stop and report that.
-- Do not pull or build images. Do not touch containers of other users.
-- Use only devices that `qaic-util -q` shows as free. Give the container its own name. No
-  restart policy. Pick ports that are not in use.
-- Find the launch procedure from the launcher and docs inside the image, and from the launch
-  command in the bug report (ask the user for its path). Do not guess flags.
-- Keep the report's settings where the small model allows: 256-token prefill chunk, decode
-  batch size 1, 4 devices per worker. Use context 32768 if the compile for it finishes in
-  about an hour; otherwise 8192, and say which. Check disk space first.
-- Put the client script and logs under `results-logs/`. Nothing new in tracked files.
-- At the end stop and remove your container and confirm the devices are free again.
-
-### Step 1. Bring up 1 prefill + 1 decode + hand-off service + proxy
-
-Report compile time (if any), start-up time, and the versions in use.
-
-### Step 2. First-token time through the proxy
-
-Three prompt sizes: about 100, 500 and 1000 tokens. Temperature 0, a unique prefix per
-request, one request at a time, 5 requests per size, streaming. Record time to the first
-streamed token. Send one non-streamed request per size to get the server's own
-`prompt_tokens`, and report that number, not the target size.
-
-### Step 3. Split the time by hop
-
-For the same three sizes, 5 requests each, call the workers directly in the same order the
-proxy does:
-
-1. The prefill worker alone, the way the proxy calls it. Time the full reply.
-2. Then the decode worker alone with the same request, streaming. Time to the first token.
-
-Also turn on the per-stage timing switches you listed under question 7 of task f, if they
-do not change the request path, and read out what they print for one request per size.
+If the launcher and compile allow a prefill worker on 2 devices for this model, time the
+first token at about 100 and 1000 tokens with the 256-token chunk. If not supported, say
+so and skip.
 
 ### Report for this task
 
-- Step 1: done or failed, versions, context used, compile and start-up time.
-- One table, one row per size: server prompt tokens, chunks, proxy first token (median),
-  prefill hop (median), decode hop to first token (median), sum of the two hops.
-- A fit of proxy first-token time as fixed + per chunk.
-- Any per-stage timing lines that show where the decode hop spends its time before the
-  first token.
-- Cleanup: container removed, devices free.
+Up to 45 lines; split into `PART 1/2` and `PART 2/2` if it does not fit one screen.
+
+- A: the one-line facts.
+- B: the table, then: is the time flat inside a chunk, and how big is the step at each
+  boundary compared with the stage time?
+- C: the length where text breaks, what it follows, and which switch (if any) fixes it.
+- D and E: one row per configuration: compile time, stage time, first token per size,
+  text correct or not.
+- One line: which configuration gave the lowest first token at 100 tokens.
+- Cleanup state and disk left.
 
 ---
 
-## Separate task, only when the user asks for it by id
+## Parked, do not run
 
 **Task id: 2026-11-11-h**
 

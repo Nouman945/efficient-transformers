@@ -135,7 +135,57 @@ Open questions the current and next tasks are meant to answer:
 
 ## Current task
 
+**Task id: 2026-11-11-i**
+
+Read-only inventory of this server, so the remote agent knows what it can reproduce here.
+No compile, no model run, no downloads, no pulls, no container start. Do not print tokens,
+passwords, proxy credentials or IP addresses. Write the full output of every command to
+`results-logs/server_inventory.txt`; the report is only the summary.
+
+Collect:
+
+1. **Host.** CPU model, sockets, cores, threads, NUMA nodes. RAM total and free. OS and
+   kernel. Python versions available.
+2. **Cards.** From `/opt/qti-aic/tools/qaic-util -q`: number of cards and devices, how many
+   are free, device status values seen, firmware and SDK versions, memory per device, and
+   any device that is not Ready. Which user's processes hold the busy devices.
+3. **SDK.** Platform SDK and Apps SDK versions installed. What is under
+   `/opt/qti-aic/integrations/` (names and versions only).
+4. **Containers.** docker or podman version; whether this user can run it; local images
+   (repository, tag, size); running containers (name, image, owner if visible). Whether a
+   registry is configured from which the serving image named in the bug report could be
+   obtained (check config only, do not pull).
+5. **Ports.** Whether these are free: 5066, 7000, 6800-6807, 6900-6907.
+6. **Shared memory and limits.** Size and free space of `/dev/shm`; `ulimit -a` for this
+   user; hugepage settings; `vm.max_map_count`.
+7. **Disk.** Free space on `/local/mnt`, `/usr2`, the home directory and `/tmp`.
+8. **Models already here.** In the Hugging Face cache and `QEFF_HOME` (see `~/.cshrc`):
+   which models are cached, with sizes. Say whether `openai/gpt-oss-20b` and
+   `openai/gpt-oss-120b` weights are present and complete. List existing compiled QPC
+   folders for gpt-oss with their size and, from their config files, context length, batch
+   size, device count and whether they are prefill or decode.
+9. **Environments.** Each venv under `/local/mnt/workspace/nrasheed` with its Python,
+   `QEfficient`, `transformers`, `torch` and `onnx` versions, and whether `vllm` is in it.
+10. **Network.** Whether `huggingface.co` is reachable from this host (one HEAD request), and
+    whether a proxy variable is set (yes or no only).
+
+### Report for this task
+
+Up to 45 lines. If it does not fit one screen, split it into `PART 1/2` and `PART 2/2`,
+each ending with a blank line, so two photos cover it. One or two lines per item above,
+numbers only. End with:
+
+- What on this server would block a run of one prefill worker plus one decode worker of
+  gpt-oss-120b at 32K context (devices, disk, shared memory, missing weights, missing image).
+- Anything unusual you saw that the remote agent did not ask about.
+
+---
+
+## Later task, only when the user asks for it by id
+
 **Task id: 2026-11-11-g**
+
+This is the serving-stack timing task. Run it only when the user asks for it by id.
 
 Goal: measure the first-token path on a running disaggregated serving stack on this
 machine, with `openai/gpt-oss-20b`, one prefill worker and one decode worker, and split the

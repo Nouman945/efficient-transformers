@@ -188,3 +188,30 @@ do not change the request path, and read out what they print for one request per
 - Any per-stage timing lines that show where the decode hop spends its time before the
   first token.
 - Cleanup: container removed, devices free.
+
+---
+
+## Separate task, only when the user asks for it by id
+
+**Task id: 2026-11-11-h**
+
+This is not part of the bug work. It checks a clean branch meant for a pull request to the
+public repository: the example speed-up without any debug code.
+
+Use the venv `/local/mnt/workspace/nrasheed/qeff_env_gptoss`. No new compile should be
+needed; say so if one starts.
+
+1. `git fetch`, then take two files from the branch `gpt-oss-cb-kv-handoff-once` into the
+   working tree without switching branch:
+   `QEfficient/generation/_kv_dma_handoff.py` and
+   `examples/disagg_serving/gpt_oss_disagg_mode_cb_chunking_with_kv_share.py`.
+2. Run H: the example with the six prompts in the usual order, same arguments as run A.
+3. Run I: the same with prompt order 4, 5, 0, 1, 2, 3, same arguments as run E.
+4. Run the device test
+   `tests/transformers/disaggregated/test_gpt_oss_disagg_cb_kv_share_w_hf_fp32.py` if it can
+   run here; report pass, fail or why it cannot run.
+5. Restore the two files to the branch head and confirm `git diff HEAD` is empty.
+
+Report: tok/sec of H and I; for each prompt, whether H's text equals run A's (`before.txt`)
+and whether I's text equals run E's (`run_e.txt`), with the first differing character if
+not; the test result. Expected: all texts equal, about 43 tok/sec.

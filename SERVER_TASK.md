@@ -123,6 +123,21 @@ Results of task 2026-11-11-f (read from code of nearby versions, not the deploye
   hand-off service shuts down. Possible link to the memory growth. Not checked on a
   running system.
 
+Results of task 2026-11-11-g (gpt-oss-20b, newer serving image, 1 prefill + 1 decode,
+context 32768, 256-token chunk, 4 devices per worker, decode batch 1):
+
+- First token through the proxy: 0.98 s (1 chunk), 1.22 s (2 chunks), 2.14 s (4 chunks).
+- Almost all of it is prefill device time. The proxy adds about 0. Hand-off, bind and the
+  first decode step together are about 20 ms.
+- The prefill worker runs as a 4-stage pipeline, about 0.235 s per stage per chunk. One
+  chunk must pass all 4 stages before anything comes out, so 1 chunk costs 4 stage times.
+  A second chunk overlaps and adds 1 stage time. At most 2 chunks were in flight, so
+  4 chunks cost 9 stage times.
+- So the "fixed" part seen here is the pipeline depth (stages - 1) times the stage time.
+  It is not scheduling and not the KV hand-off.
+- Side finding, not followed up: decode text was wrong for prompts of 136 tokens and more
+  (fine at 118). Timing unaffected. May come from the start-up override that was needed.
+
 Open questions the current and next tasks are meant to answer:
 
 1. Does the example-level change give the same answers as the old code when slots refill?
@@ -178,6 +193,35 @@ numbers only. End with:
 - What on this server would block a run of one prefill worker plus one decode worker of
   gpt-oss-120b at 32K context (devices, disk, shared memory, missing weights, missing image).
 - Anything unusual you saw that the remote agent did not ask about.
+
+---
+
+## Next timing task, only when the user asks for it by id
+
+**Task id: 2026-11-11-j**
+
+Goal: test the pipeline-depth explanation from task g and try the two obvious ways to cut
+the first-token time for short prompts. Same stack, model and rules as task g (ask the user
+before starting a container; clean up at the end). Reuse the task g exports where possible.
+Before compiling, check disk; if space is short, ask the user whether older exports of this
+work may be deleted, do not delete on your own.
+
+1. **Staircase.** With the task g setup, time the first token (5 requests each, median) for
+   server prompt sizes just under and just over each chunk boundary: about 100, 250, 260,
+   510, 520, 765, 775, 1020, 1030 tokens. Report the size, chunks and time. Expected: flat
+   inside a chunk, a step of about one stage time at each boundary.
+2. **Smaller chunk.** Compile prefill with a 128-token chunk (and 64 if time allows), same
+   other settings. Time the first token at about 60, 100, 250, 500 and 1000 prompt tokens.
+   Report the per-stage time from the per-stage timing switch.
+3. **Fewer stages.** If the launcher and compile allow the prefill worker to use 2 devices
+   (2 pipeline stages) for this model, do the same timing at about 100 and 1000 tokens with
+   the 256-token chunk. If it is not supported, say so and skip.
+4. For each configuration report: compile time, per-stage time, chunks in flight, and
+   whether decode text is correct for one prompt under and one over 136 tokens.
+
+Report: one table per step, then one line each: does first-token time equal
+(stages + chunks - 1) x stage time when all chunks can be in flight; how the stage time
+changes with chunk length; which configuration gave the lowest first token at 100 tokens.
 
 ---
 
